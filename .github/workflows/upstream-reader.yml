@@ -106,6 +106,81 @@ jobs:
           $source = $updated
           Set-Content -Path $auto -Value $source -NoNewline
 
+      - name: Prefer visible legal win actions and classify localized win label
+        shell: pwsh
+        working-directory: upstream
+        run: |
+          $variant = 'Mahjong.Plugin.Dalamud/GameState/Variants/BaseEmjVariant.cs'
+          $source = Get-Content $variant -Raw
+          $oldScan = '        var labels = ScanButtonLabels(atkValues, scanLimit: profile.AtkValues.ButtonLabelScanLimit);'
+          $newScan = $oldScan + "`n" +
+            '        // Generic Chinese win labels are shared by Ron/Tsumo; hand shape disambiguates them.' + "`n" +
+            '        if (hand.Count > 0 && hand.Count % 3 == 2) labels.OffersRon = false;' + "`n" +
+            '        else if (hand.Count > 0 && hand.Count % 3 == 1) labels.OffersTsumo = false;'
+          if (-not $source.Contains($oldScan)) { throw 'Button-label scan insertion point not found.' }
+          $source = $source.Replace($oldScan, $newScan)
+
+          $oldList = @'
+                  else if (LayoutActionLabelMatcher.IsTsumo(raw, ActionLabels))
+                      flags |= ActionFlags.Tsumo;
+              }
+
+              var pons = new List<MeldCandidate>();
+          '@
+          $newList = @'
+                  else if (LayoutActionLabelMatcher.IsTsumo(raw, ActionLabels))
+                      flags |= ActionFlags.Tsumo;
+              }
+
+              // The CN client may use one generic "胡/胡牌/和牌" label for both win types.
+              if (hand.Count > 0 && hand.Count % 3 == 2 && (flags & ActionFlags.Ron) != 0)
+                  flags = (flags & ~ActionFlags.Ron) | ActionFlags.Tsumo;
+              else if (hand.Count > 0 && hand.Count % 3 == 1 && (flags & ActionFlags.Tsumo) != 0)
+                  flags = (flags & ~ActionFlags.Tsumo) | ActionFlags.Ron;
+
+              var pons = new List<MeldCandidate>();
+          '@
+          if (-not $source.Contains($oldList)) { throw 'List-item win classification insertion point not found.' }
+          $source = $source.Replace($oldList, $newList)
+          Set-Content -Path $variant -Value $source -NoNewline
+
+          $auto = 'Mahjong.Plugin.Dalamud/Actions/AutoPlayLoop.cs'
+          $source = Get-Content $auto -Raw
+          $oldWin = @'
+                      hasMortalWait = false;
+                      plugin.Aggregator.PublishLocalExecution(snapshot, choice, "terminal-guard");
+                      return true;
+                  }
+              }
+          '@
+          $newWin = @'
+                      hasMortalWait = false;
+                      plugin.Aggregator.PublishLocalExecution(snapshot, choice, "terminal-guard");
+                      return true;
+                  }
+
+                  // A live, parsed win button is authoritative UI evidence. Do not wait for
+                  // Mortal's public discard stream to approve a win already offered by the game.
+                  if (snapshot.Legal.Can(ActionFlags.Tsumo))
+                  {
+                      choice = ActionChoice.DeclareTsumo("game UI exposed a legal Tsumo action");
+                      hasMortalWait = false;
+                      plugin.Aggregator.PublishLocalExecution(snapshot, choice, "terminal-guard");
+                      return true;
+                  }
+                  if (snapshot.Legal.Can(ActionFlags.Ron))
+                  {
+                      choice = ActionChoice.DeclareRon("game UI exposed a legal Ron action");
+                      hasMortalWait = false;
+                      plugin.Aggregator.PublishLocalExecution(snapshot, choice, "terminal-guard");
+                      return true;
+                  }
+              }
+          '@
+          if (-not $source.Contains($oldWin)) { throw 'Terminal-win selection insertion point not found.' }
+          $source = $source.Replace($oldWin, $newWin)
+          Set-Content -Path $auto -Value $source -NoNewline
+
       - name: Build plugin
         working-directory: upstream
         run: dotnet build Mahjong.Plugin.Dalamud/Mahjong.Plugin.Dalamud.csproj --configuration Release --no-restore
