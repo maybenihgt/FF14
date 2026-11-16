@@ -24,6 +24,10 @@ jobs:
           Invoke-WebRequest -Uri 'https://goatcorp.github.io/dalamud-distrib/latest.zip' -OutFile 'dalamud-latest.zip'
           Expand-Archive -Path 'dalamud-latest.zip' -DestinationPath $target -Force
 
+      - name: Validate Mortal bridge syntax
+        shell: pwsh
+        run: python -m py_compile backend/mortal_bridge.py
+
       - name: Build plugin
         run: dotnet build MahjongAI-Assistant/MahjongAI-Assistant.csproj -c Release
 
