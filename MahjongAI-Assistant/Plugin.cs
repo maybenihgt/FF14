@@ -46,7 +46,7 @@ public sealed class Plugin : IDalamudPlugin
 
     private void OnAddonSetup(AddonEvent type, AddonArgs args)
     {
-        if (string.IsNullOrWhiteSpace(args.AddonName) || args.AddonName == AddonArgs.InvalidAddon)
+        if (string.IsNullOrWhiteSpace(args.AddonName))
             return;
         addonEvents.Enqueue($"{DateTime.Now:HH:mm:ss}  {type}  {args.AddonName}");
         while (addonEvents.Count > 100) addonEvents.TryDequeue(out _);
