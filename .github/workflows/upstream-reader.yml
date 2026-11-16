@@ -137,7 +137,14 @@ jobs:
 
           $auto = 'Mahjong.Plugin.Dalamud/Actions/AutoPlayLoop.cs'
           $source = Get-Content $auto -Raw
+          $methodWin = '    private bool TryChoose(StateSnapshot snapshot, out ActionChoice choice)'
+          $methodAt = $source.IndexOf($methodWin)
+          if ($methodAt -lt 0) { throw 'TryChoose method not found.' }
+          $prefix = $source.Substring(0, $methodAt)
+          $tail = $source.Substring($methodAt)
           $anchorWin = '        if (plugin.MortalBridge.Enabled && !plugin.MortalBridge.CurrentHandQuarantined)'
+          $anchorAt = $tail.IndexOf($anchorWin)
+          if ($anchorAt -lt 0) { throw 'TryChoose Mortal fallback insertion point not found.' }
           $forceWin = '        // The live game UI has already exposed a legal win action. Do not wait for Mortal.' + "`n" +
             '        if (snapshot.Legal.Can(ActionFlags.Tsumo))' + "`n" +
             '        {' + "`n" +
@@ -153,8 +160,8 @@ jobs:
             '            plugin.Aggregator.PublishLocalExecution(snapshot, choice, "terminal-guard");' + "`n" +
             '            return true;' + "`n" +
             '        }' + "`n" + "`n"
-          if (-not $source.Contains($anchorWin)) { throw 'Terminal-win fallback insertion point not found.' }
-          $source = $source.Replace($anchorWin, $forceWin + $anchorWin)
+          $tail = $tail.Insert($anchorAt, $forceWin)
+          $source = $prefix + $tail
           Set-Content -Path $auto -Value $source -NoNewline
 
       - name: Build plugin
