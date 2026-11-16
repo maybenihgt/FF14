@@ -45,3 +45,10 @@ The CI overlay also applies two conservative changes to the pinned upstream sour
 - If Mortal times out on a Pon/Chi/MinKan reaction without an authoritative opponent-discard event, automation is disarmed instead of sending a Pass. The player must resolve that prompt manually.
 
 This is a safety and detection improvement, not proof that every China-client Chi/Pon/Kan option is decoded. Verify the prompt and action index against a live `/mjauto variant dump` and call-prompt capture before re-enabling Auto-play.
+
+
+## Simplified Chinese Emj dump findings (2026-11-16)
+
+A user-provided live dump reports `Client language: ChineseSimplified` and resolved addon `Emj` (not `EmjL`). The candidate layout now matches both fields so `VariantSelector` scores it above the generic Emj profile. The same dump places the live action labels at AtkValues indexes 30–36 (`碰！`, `吃！`, `杠！`, `立直！`, `自摸！`, `和牌！`, `听牌！`), while the upstream default scan limit was 20. The CN candidate scan limit is now 50 (the dump has 50 values) and exact full-width punctuation aliases are included.
+
+The intended user mode is automatic discard assistance with manual user choice at call prompts; do not force an automatic Chi/Pon/Kan selection. The game prompt should remain available for the user to click. Build success only confirms compile/package; in-game call-prompt and win recognition still require replay testing against the captured dump and fresh live prompts.
