@@ -215,6 +215,100 @@ jobs:
           '@
           Set-Content -Path 'Mahjong.Plugin.Dalamud/Composition/ConfigMigratorV3ToV4.cs' -Value $migration
 
+      - name: Keep actionable game prompts for manual user selection
+        shell: pwsh
+        working-directory: upstream
+        run: |
+          $dispatcher = 'Mahjong.Plugin.Dalamud/Actions/InputDispatcher.cs'
+          $source = Get-Content $dispatcher -Raw
+          $anchorMethod = '    public unsafe bool IsCallPromptVisible()'
+          $helper = @'
+              /// <summary>True only when the live modal rows contain a recognized action/pass label. This lets automation pause for the user's manual choice without confusing a post-call discard list for a decision prompt.</summary>
+              public unsafe bool HasManualChoicePrompt()
+              {
+                  if (!addon.TryGet(out var unit, out _) || !unit->IsVisible)
+                      return false;
+
+                  LastCallOptions = CallPromptReader.Read(unit, CallModalHostNodeId, CallModalShellNodeId);
+                  foreach (var option in LastCallOptions)
+                  {
+                      if (!option.Enabled)
+                          continue;
+                      if (LayoutActionLabelMatcher.IsAcceptAction(option.Label, ActionLabels)
+                          || LayoutActionLabelMatcher.IsPass(option.Label, ActionLabels))
+                          return true;
+                  }
+                  return false;
+              }
+
+          '@
+          if (-not $source.Contains($anchorMethod)) { throw 'InputDispatcher call-prompt visibility method not found.' }
+          $source = $source.Replace($anchorMethod, $helper + $anchorMethod)
+          Set-Content -Path $dispatcher -Value $source -NoNewline
+
+          $auto = 'Mahjong.Plugin.Dalamud/Actions/AutoPlayLoop.cs'
+          $source = Get-Content $auto -Raw
+          $anchorObserve = @'
+                  LastObservedState = state;
+                  LastObservedHandCount = context.Hand;
+
+                  if (state == ChiVariantSelectStateCode)
+          '@
+          $insertObserve = @'
+                  LastObservedState = state;
+                  LastObservedHandCount = context.Hand;
+
+                  // User preference: normal tile discards may be automated, but action menus
+                  // (Riichi/Pass, Chi/Pon/Kan, Ron/Tsumo) remain under manual control.
+                  if (plugin.Dispatcher.HasManualChoicePrompt()
+                      || (state == ChiVariantSelectStateCode && plugin.Dispatcher.IsCallPromptVisible()))
+                  {
+                      hasMortalWait = false;
+                      fsm.ClearContext();
+                      LastActionDescription = "manual action prompt visible; waiting for user selection";
+                      EmitSkipReason(LastActionDescription, state, context.Hand, (int)snap.Legal.Flags);
+                      return;
+                  }
+
+                  if (state == ChiVariantSelectStateCode)
+          '@
+          if (-not $source.Contains($anchorObserve)) { throw 'AutoPlayLoop observation insertion point not found.' }
+          $source = $source.Replace($anchorObserve, $insertObserve)
+
+          $anchorDiscard = @'
+                      int currentState = ReadStateCode();
+                      bool isTerminalWin = snap is not null
+          '@
+          $insertDiscard = @'
+                      int currentState = ReadStateCode();
+                      if (plugin.Dispatcher.HasManualChoicePrompt())
+                      {
+                          LastActionDescription = "manual action prompt appeared before discard; waiting for user selection";
+                          return;
+                      }
+                      bool isTerminalWin = snap is not null
+          '@
+          if (-not $source.Contains($anchorDiscard)) { throw 'ScheduleDiscard guard insertion point not found.' }
+          $source = $source.Replace($anchorDiscard, $insertDiscard)
+
+          $anchorCall = @'
+                      int currentState = ReadStateCode();
+                      if (snap is null)
+          '@
+          $insertCall = @'
+                      int currentState = ReadStateCode();
+                      if (plugin.Dispatcher.HasManualChoicePrompt())
+                      {
+                          LastActionDescription = "manual action prompt appeared before call decision; waiting for user selection";
+                          hasMortalWait = false;
+                          return;
+                      }
+                      if (snap is null)
+          '@
+          if (-not $source.Contains($anchorCall)) { throw 'ScheduleCallDecision guard insertion point not found.' }
+          $source = $source.Replace($anchorCall, $insertCall)
+          Set-Content -Path $auto -Value $source -NoNewline
+
       - name: Build plugin
         working-directory: upstream
         run: dotnet build Mahjong.Plugin.Dalamud/Mahjong.Plugin.Dalamud.csproj --configuration Release --no-restore
