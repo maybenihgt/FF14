@@ -62,6 +62,7 @@ jobs:
           if (-not $source.Contains($old)) { throw 'Expected optional EmjTableReader hookup was not found.' }
           $source = $source.Replace($old, '            tableScores: null);')
           Set-Content -Path $file -Value $source -NoNewline
+          Remove-Item 'Mahjong.Plugin.Dalamud/GameState/EmjTableReader.cs' -Force
 
       - name: Build plugin
         working-directory: upstream
