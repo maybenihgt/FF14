@@ -1,0 +1,16 @@
+{
+  "Author": "Mahjong AI Assistant",
+  "Name": "Mahjong AI Assistant",
+  "InternalName": "MahjongAI-Assistant",
+  "AssemblyVersion": "1.0.0.0",
+  "Description": "Lightweight local hand analysis for manually entered visible riichi-mahjong tiles.",
+  "ApplicableVersion": "any",
+  "Tags": ["mahjong", "analysis", "utility"],
+  "DalamudApiLevel": 15,
+  "LoadRequiredState": 0,
+  "LoadSync": false,
+  "CanUnloadAsync": false,
+  "LoadPriority": 0,
+  "Punchline": "Lightweight in-game mahjong hand analysis",
+  "AcceptsFeedback": false
+}
