@@ -120,28 +120,19 @@ jobs:
           if (-not $source.Contains($oldScan)) { throw 'Button-label scan insertion point not found.' }
           $source = $source.Replace($oldScan, $newScan)
 
-          $oldList = @'
-                  else if (LayoutActionLabelMatcher.IsTsumo(raw, ActionLabels))
-                      flags |= ActionFlags.Tsumo;
-              }
-
-              var pons = new List<MeldCandidate>();
-          '@
-          $newList = @'
-                  else if (LayoutActionLabelMatcher.IsTsumo(raw, ActionLabels))
-                      flags |= ActionFlags.Tsumo;
-              }
-
-              // The CN client may use one generic "胡/胡牌/和牌" label for both win types.
-              if (hand.Count > 0 && hand.Count % 3 == 2 && (flags & ActionFlags.Ron) != 0)
-                  flags = (flags & ~ActionFlags.Ron) | ActionFlags.Tsumo;
-              else if (hand.Count > 0 && hand.Count % 3 == 1 && (flags & ActionFlags.Tsumo) != 0)
-                  flags = (flags & ~ActionFlags.Tsumo) | ActionFlags.Ron;
-
-              var pons = new List<MeldCandidate>();
-          '@
-          if (-not $source.Contains($oldList)) { throw 'List-item win classification insertion point not found.' }
-          $source = $source.Replace($oldList, $newList)
+          $methodMarker = '    private LegalActions BuildCallPromptLegalFromListItems('
+          $methodAt = $source.IndexOf($methodMarker)
+          if ($methodAt -lt 0) { throw 'BuildCallPromptLegalFromListItems method not found.' }
+          $tail = $source.Substring($methodAt)
+          $anchor = '        var pons = new List<MeldCandidate>();'
+          $insertAt = $tail.IndexOf($anchor)
+          if ($insertAt -lt 0) { throw 'Call-list candidate insertion point not found.' }
+          $insert = '        // Classify generic CN win labels ("胡/胡牌/和牌") using the concealed-hand shape.' + "`n" +
+            '        if (hand.Count > 0 && hand.Count % 3 == 2 && (flags & ActionFlags.Ron) != 0)' + "`n" +
+            '            flags = (flags & ~ActionFlags.Ron) | ActionFlags.Tsumo;' + "`n" +
+            '        else if (hand.Count > 0 && hand.Count % 3 == 1 && (flags & ActionFlags.Tsumo) != 0)' + "`n" +
+            '            flags = (flags & ~ActionFlags.Tsumo) | ActionFlags.Ron;' + "`n" + "`n"
+          $source = $source.Substring(0, $methodAt) + $tail.Insert($insertAt, $insert)
           Set-Content -Path $variant -Value $source -NoNewline
 
           $auto = 'Mahjong.Plugin.Dalamud/Actions/AutoPlayLoop.cs'
