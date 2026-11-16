@@ -52,3 +52,8 @@ This is a safety and detection improvement, not proof that every China-client Ch
 A user-provided live dump reports `Client language: ChineseSimplified` and resolved addon `Emj` (not `EmjL`). The candidate layout now matches both fields so `VariantSelector` scores it above the generic Emj profile. The same dump places the live action labels at AtkValues indexes 30–36 (`碰！`, `吃！`, `杠！`, `立直！`, `自摸！`, `和牌！`, `听牌！`), while the upstream default scan limit was 20. The CN candidate scan limit is now 50 (the dump has 50 values) and exact full-width punctuation aliases are included.
 
 The intended user mode is automatic discard assistance with manual user choice at call prompts; do not force an automatic Chi/Pon/Kan selection. The game prompt should remain available for the user to click. Build success only confirms compile/package; in-game call-prompt and win recognition still require replay testing against the captured dump and fresh live prompts.
+
+
+## Continuous auto-queue manual opt-in
+
+On every plugin load, startup configuration initialization resets `ContinuousCollection` to false before the collection loop is constructed. The queue loop therefore stays idle after launching/reloading the plugin until the user explicitly checks the `Auto-queue, commence and repeat until stopped` checkbox. Checking it still invokes the existing `Collection.Start()` flow; unchecking invokes `Stop()`. The settings hint now states that it will not auto-start after reload.
