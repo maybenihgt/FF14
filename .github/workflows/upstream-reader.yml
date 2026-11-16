@@ -71,7 +71,7 @@ jobs:
           $variant = 'Mahjong.Plugin.Dalamud/GameState/Variants/BaseEmjVariant.cs'
           $source = Get-Content $variant -Raw
           $oldPrompt = '        if (isCallPromptState && callModalVisible)'
-          $newPrompt = '        bool atkHasCallLabel = atkValues.Count > 0 && ScanButtonLabels(atkValues, profile.AtkValues.ButtonLabelScanLimit).HasAnyAcceptOffer' + "`r`n" + '            ;' + "`r`n" + '        if (isCallPromptState && (callModalVisible || atkHasCallLabel))'
+          $newPrompt = '        bool atkHasCallLabel = atkValues.Count > 0 && ScanButtonLabels(atkValues, profile.AtkValues.ButtonLabelScanLimit).HasAnyAcceptOffer;' + "`n" + '        if (isCallPromptState && (callModalVisible || atkHasCallLabel))'
           if (-not $source.Contains($oldPrompt)) { throw 'Call-prompt gate not found in BaseEmjVariant.cs' }
           $source = $source.Replace($oldPrompt, $newPrompt)
           $oldRows = '            if (listWidgetLabels is not null)'
