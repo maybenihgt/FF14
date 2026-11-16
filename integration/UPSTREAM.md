@@ -30,3 +30,8 @@ The workflow checks out the pinned upstream source, overlays the candidate
 profile, installs the upstream pinned Dalamud and Deucalion dependencies, and
 builds the plugin. The artifact is an upstream-based test build, not a claim
 that the China client has been verified.
+
+
+### Build compatibility patch
+
+The CI build excludes `Mahjong.Plugin.Dalamud/GameState/EmjTableReader.cs` from the pinned upstream checkout because it references an `FFXIVClientStructs.FFXIV.Client.Game.Emj` namespace absent from the pinned Dalamud SDK. This optional diagnostic probe is not part of the live addon-reader path. The exclusion is CI-only and does not modify the upstream repository or the main branch.
