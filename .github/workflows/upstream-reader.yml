@@ -2,6 +2,8 @@ name: Upstream Mahjong Reader Build
 
 on:
   workflow_dispatch:
+  push:
+    branches: [integration/upstream-auto-reader]
 
 permissions:
   contents: read
