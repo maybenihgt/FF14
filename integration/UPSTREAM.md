@@ -35,3 +35,13 @@ that the China client has been verified.
 ### Build compatibility patch
 
 The CI build excludes `Mahjong.Plugin.Dalamud/GameState/EmjTableReader.cs` from the pinned upstream checkout because it references an `FFXIVClientStructs.FFXIV.Client.Game.Emj` namespace absent from the pinned Dalamud SDK. This optional diagnostic probe is not part of the live addon-reader path. The exclusion is CI-only and does not modify the upstream repository or the main branch.
+
+
+## Call-prompt safety patch
+
+The CI overlay also applies two conservative changes to the pinned upstream source:
+
+- If the live call-list reader returns no enabled rows, the reader falls back to visible AtkValues action labels; call-prompt state 28 is included in diagnostics.
+- If Mortal times out on a Pon/Chi/MinKan reaction without an authoritative opponent-discard event, automation is disarmed instead of sending a Pass. The player must resolve that prompt manually.
+
+This is a safety and detection improvement, not proof that every China-client Chi/Pon/Kan option is decoded. Verify the prompt and action index against a live `/mjauto variant dump` and call-prompt capture before re-enabling Auto-play.
