@@ -1,0 +1,69 @@
+name: Upstream Mahjong Reader Build
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-upstream:
+    name: Build upstream reader (Windows)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout this integration repository
+        uses: actions/checkout@v4
+        with:
+          path: integration-repo
+
+      - name: Checkout pinned upstream source
+        uses: actions/checkout@v4
+        with:
+          repository: AinaSnow/FFXIV-AutoMahjongSolver
+          ref: 6202b32fffa73b48f21050b884b96c55df5945f3
+          path: upstream
+
+      - name: Overlay unverified China-client candidate profile
+        shell: pwsh
+        run: |
+          Copy-Item integration-repo/integration/cn-candidate-layout.json upstream/data/layouts/cn-candidate.json
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.401'
+
+      - name: Install pinned Dalamud build
+        shell: pwsh
+        working-directory: upstream
+        run: ./tools/install-dalamud.ps1
+
+      - name: Install pinned capture runtime
+        shell: pwsh
+        working-directory: upstream
+        run: ./tools/install-deucalion.ps1
+
+      - name: Restore
+        working-directory: upstream
+        run: dotnet restore Mahjong.Plugin.Dalamud.sln --locked-mode
+
+      - name: Build plugin
+        working-directory: upstream
+        run: dotnet build Mahjong.Plugin.Dalamud/Mahjong.Plugin.Dalamud.csproj --configuration Release --no-restore
+
+      - name: Upload plugin package
+        uses: actions/upload-artifact@v4
+        with:
+          name: DomanMahjongSolver-China-Candidate
+          path: upstream/Mahjong.Plugin.Dalamud/bin/Release/Mahjong.Plugin.Dalamud/latest.zip
+          if-no-files-found: error
+
+      - name: Upload corresponding source and integration notes
+        uses: actions/upload-artifact@v4
+        with:
+          name: DomanMahjongSolver-Corresponding-Source
+          path: |
+            upstream/
+            integration-repo/integration/
+          if-no-files-found: warn
+          retention-days: 30
