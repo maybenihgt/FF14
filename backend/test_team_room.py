@@ -51,12 +51,12 @@ class TeamRoomApiTests(unittest.TestCase):
             "team": team, "consent": True
         })
 
-    def test_rejects_live_mode(self):
+    def test_rejects_non_sandbox_mode(self):
         status, body = self.request("/v1/team-rooms", {
-            "mode": "live", "name": "A1", "team": "A", "consent": True
+            "mode": "replay", "name": "A1", "team": "A", "consent": True
         })
         self.assertEqual(status, 400)
-        self.assertEqual(body["error"], "mode_must_be_sandbox_or_replay")
+        self.assertEqual(body["error"], "mode_must_be_sandbox")
 
     def test_snapshots_hidden_until_four_explicit_consents(self):
         owner = self.make_room()
@@ -94,6 +94,32 @@ class TeamRoomApiTests(unittest.TestCase):
         owner = self.make_room()
         self.assertEqual(self.join(owner, "A2", "A")[0], 201)
         self.assertEqual(self.join(owner, "A3", "A")[0], 409)
+
+    def test_tracks_rating_delta_peak_and_games(self):
+        owner = self.make_room()
+        path = f"/v1/team-rooms/{owner['room_id']}/score"
+        token = owner["participant_token"]
+        status, first = self.request(path, {"rating": 1200}, token)
+        self.assertEqual(status, 200)
+        self.assertEqual(first["last_delta"], 0)
+        status, second = self.request(path, {"rating": 1235}, token)
+        self.assertEqual(status, 200)
+        self.assertEqual(second["last_delta"], 35)
+        self.assertEqual(second["peak_rating"], 1235)
+        status, third = self.request(path, {"rating": 1210}, token)
+        self.assertEqual(status, 200)
+        self.assertEqual(third["last_delta"], -25)
+        self.assertEqual(third["peak_rating"], 1235)
+        self.assertEqual(third["games"], 3)
+        self.assertEqual(third["total_delta"], 10)
+
+    def test_rejects_invalid_rating(self):
+        owner = self.make_room()
+        status, body = self.request(
+            f"/v1/team-rooms/{owner['room_id']}/score",
+            {"rating": -1}, owner["participant_token"])
+        self.assertEqual(status, 400)
+        self.assertEqual(body["error"], "rating_must_be_a_non_negative_integer")
 
 
 if __name__ == "__main__":
