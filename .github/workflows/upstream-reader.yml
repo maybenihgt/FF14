@@ -476,6 +476,17 @@ jobs:
           $source = $updated
           Set-Content -Path $window -Value $source -NoNewline
 
+      - name: Enable ranking-aware experimental strategy by default
+        shell: pwsh
+        working-directory: upstream
+        run: |
+          $path = 'Mahjong.Plugin.Dalamud/Configuration.cs'
+          $source = Get-Content $path -Raw
+          $source = $source.Replace('public bool EnhancedStrategy { get; init; } = false;', 'public bool EnhancedStrategy { get; init; } = true;')
+          $source = $source.Replace('public bool EnhancedShadowOnly { get; init; } = true;', 'public bool EnhancedShadowOnly { get; init; } = false;')
+          if ($source -notmatch 'EnhancedStrategy \{ get; init; \} = true;' -or $source -notmatch 'EnhancedShadowOnly \{ get; init; \} = false;') { throw 'Could not enable active enhanced strategy defaults.' }
+          Set-Content -Path $path -Value $source -NoNewline
+          Write-Host 'EnhancedStrategy=true; EnhancedShadowOnly=false; SearchBudgetMs remains 50.'
       - name: Build plugin
         working-directory: upstream
         run: dotnet build Mahjong.Plugin.Dalamud/Mahjong.Plugin.Dalamud.csproj --configuration Release --no-restore
