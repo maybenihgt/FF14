@@ -393,6 +393,26 @@ jobs:
           $source = $source.Replace($oldRefresh, $newRefresh)
           Set-Content -Path $auto -Value $source -NoNewline
 
+      - name: Require manual opt-in for continuous auto-queue on every plugin load
+        shell: pwsh
+        working-directory: upstream
+        run: |
+          $plugin = 'Mahjong.Plugin.Dalamud/Plugin.cs'
+          $source = Get-Content $plugin -Raw
+          $old = '        migrated = migrated with { DevMode = false };'
+          $new = '        migrated = migrated with { DevMode = false, ContinuousCollection = false };'
+          if (-not $source.Contains($old)) { throw 'Plugin startup config reset marker not found.' }
+          $source = $source.Replace($old, $new)
+          Set-Content -Path $plugin -Value $source -NoNewline
+
+          $window = 'Mahjong.Plugin.Dalamud/UI/MainWindow.cs'
+          $source = Get-Content $window -Raw
+          $oldHint = 'Theme.Subtle(Loc.T($"Completed this load: {plugin.Collection.CompletedMatches}. No time limit; resumes after reload.", $"本次加载已完成：{plugin.Collection.CompletedMatches} 场。没有时间限制，重载后会继续。"));'
+          $newHint = 'Theme.Subtle(Loc.T($"Completed this load: {plugin.Collection.CompletedMatches}. Enable the checkbox to start; it will not auto-start after reload.", $"本次加载已完成：{plugin.Collection.CompletedMatches} 场。勾选后才开始排队；插件重载后不会自动开始。"));'
+          if (-not $source.Contains($oldHint)) { throw 'Continuous collection UI hint marker not found.' }
+          $source = $source.Replace($oldHint, $newHint)
+          Set-Content -Path $window -Value $source -NoNewline
+
       - name: Build plugin
         working-directory: upstream
         run: dotnet build Mahjong.Plugin.Dalamud/Mahjong.Plugin.Dalamud.csproj --configuration Release --no-restore
