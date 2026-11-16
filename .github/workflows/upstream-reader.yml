@@ -86,27 +86,24 @@ jobs:
 
           $auto = 'Mahjong.Plugin.Dalamud/Actions/AutoPlayLoop.cs'
           $source = Get-Content $auto -Raw
-          $oldFallback = @'
-          var fallback = forceSafePass
-                          ? ActionChoice.Pass("pass: no authoritative opponent discard")
-                          : plugin.Aggregator.Choose(plugin.MortalBridge.NormalizeForLocalFallback(snapshot));
-          '@
-          $newFallback = @'
-          if (forceSafePass)
-                      {
-                          // Do not click Pass when a live UI reaction is not corroborated by server state.
-                          // Stop automation and leave the reaction window to the player.
-                          hasMortalWait = false;
-                          choice = ActionChoice.Pass("no authoritative opponent discard; manual reaction required");
-                          LastActionDescription = "automation safety stop: opponent reaction lacks authoritative discard; manual click required";
-                          log.Warning($"[AutoPlayLoop] {LastActionDescription}");
-                          plugin.ConfigService.Update(c => c with { AutomationArmed = false, ContinuousCollection = false });
-                          return false;
-                      }
-                      var fallback = plugin.Aggregator.Choose(plugin.MortalBridge.NormalizeForLocalFallback(snapshot));
-          '@
-          if (-not $source.Contains($oldFallback)) { throw 'Mortal safe-pass fallback block not found in AutoPlayLoop.cs' }
-          $source = $source.Replace($oldFallback, $newFallback)
+          $pattern = '(?m)^            var fallback = forceSafePass\r?\n                \? ActionChoice\.Pass\("pass: no authoritative opponent discard"\)\r?\n                : plugin\.Aggregator\.Choose\(plugin\.MortalBridge\.NormalizeForLocalFallback\(snapshot\)\);'
+          $replacement = @"
+            if (forceSafePass)
+            {
+                // Do not click Pass when a live UI reaction is not corroborated by server state.
+                // Stop automation and leave the reaction window to the player.
+                hasMortalWait = false;
+                choice = ActionChoice.Pass("no authoritative opponent discard; manual reaction required");
+                LastActionDescription = "automation safety stop: opponent reaction lacks authoritative discard; manual click required";
+                log.Warning($"[AutoPlayLoop] {LastActionDescription}");
+                plugin.ConfigService.Update(c => c with { AutomationArmed = false, ContinuousCollection = false });
+                return false;
+            }
+            var fallback = plugin.Aggregator.Choose(plugin.MortalBridge.NormalizeForLocalFallback(snapshot));
+"@
+          $updated = [regex]::Replace($source, $pattern, [System.Text.RegularExpressions.MatchEvaluator]{ param($m) $replacement }, 1)
+          if ($updated -eq $source) { throw 'Mortal safe-pass fallback pattern did not match AutoPlayLoop.cs' }
+          $source = $updated
           Set-Content -Path $auto -Value $source -NoNewline
 
       - name: Build plugin
