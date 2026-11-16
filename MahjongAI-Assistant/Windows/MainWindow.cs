@@ -106,8 +106,20 @@ public sealed class MainWindow : Window, IDisposable
         ImGui.Text($"电脑：{Environment.MachineName}");
         ImGui.Text($"本地标签：{plugin.Configuration.AccountId}");
         ImGui.Text($"FFXIV 玩家状态：{(Plugin.PlayerState.IsLoaded ? "已登录" : "未登录")}");
-        ImGui.Text("分析引擎：内置轻量算法（无需模型下载）");
-        ImGui.Text("游戏数据读取：手动录入；UI Addon 事件探测已加入");
+        ImGui.Text("决策引擎：Mortal（需单独配置模型与运行环境）");
+        ImGui.Text("游戏数据读取：国服 Addon 适配尚未接入");
+        ImGui.Separator();
+        ImGui.Text("Mortal 本地服务");
+        ImGui.SetNextItemWidth(-1);
+        var bridgeUrl = plugin.Configuration.MortalBridgeUrl;
+        if (ImGui.InputText("服务地址", ref bridgeUrl, 256))
+        {
+            plugin.Configuration.MortalBridgeUrl = bridgeUrl;
+            plugin.Configuration.Save();
+        }
+        if (ImGui.Button(plugin.IsCheckingMortalBridge ? "检测中..." : "检测 Mortal 连接") && !plugin.IsCheckingMortalBridge)
+            _ = plugin.CheckMortalBridgeAsync();
+        ImGui.TextWrapped(plugin.MortalBridgeStatus);
     }
 
     private void DrawAddonProbe()
@@ -133,11 +145,11 @@ public sealed class MainWindow : Window, IDisposable
 
     private void DrawNotes()
     {
-        ImGui.TextWrapped("本插件不需要外部 AI 环境、授权服务器或模型文件。分析数据由玩家手动输入自己可见的手牌。");
+        ImGui.TextWrapped("目标为国服多玛方城战：通过 Dalamud 读取牌桌状态，交由 Mortal 决策，并提供可控的自动操作。当前版本仍处于开发阶段，自动读取、AI 决策接入和自动操作尚未完成。");
         ImGui.Spacing();
         ImGui.TextWrapped("算法支持闭门日本立直麻将的标准型、七对子、国士无双向听数，以及理论有效牌/弃牌比较。理论剩余牌数只根据输入手牌扣除，不包含牌河、副露或其他可见牌。");
         ImGui.Spacing();
-        ImGui.TextWrapped("副露、赤宝牌、役种、点数、场况和 FF14 多玛麻将特殊规则尚未实现。请勿将结果视为完整牌局决策，也不提供自动出牌或多账号操纵牌局功能。");
+        ImGui.TextWrapped("当前手牌分析器仅用于算法调试；国服游戏数据映射、完整牌局事件流、Mortal 推理和游戏操作适配仍需实现。自动化可能违反游戏服务条款并带来账号风险。");
     }
 
     private void Analyze()
