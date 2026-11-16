@@ -64,6 +64,51 @@ jobs:
           Set-Content -Path $file -Value $source -NoNewline
           Remove-Item 'Mahjong.Plugin.Dalamud/GameState/EmjTableReader.cs' -Force
 
+      - name: Harden Mahjong call-prompt detection and safe fallback
+        shell: pwsh
+        working-directory: upstream
+        run: |
+          $variant = 'Mahjong.Plugin.Dalamud/GameState/Variants/BaseEmjVariant.cs'
+          $source = Get-Content $variant -Raw
+          $oldPrompt = '        if (isCallPromptState && callModalVisible)'
+          $newPrompt = '        bool atkHasCallLabel = atkValues.Count > 0 && ScanButtonLabels(atkValues, profile.AtkValues.ButtonLabelScanLimit).HasAnyAcceptOffer' + "`r`n" + '            ;' + "`r`n" + '        if (isCallPromptState && (callModalVisible || atkHasCallLabel))'
+          if (-not $source.Contains($oldPrompt)) { throw 'Call-prompt gate not found in BaseEmjVariant.cs' }
+          $source = $source.Replace($oldPrompt, $newPrompt)
+          $oldRows = '            if (listWidgetLabels is not null)'
+          $newRows = '            if (listWidgetLabels is { Count: > 0 })'
+          if (-not $source.Contains($oldRows)) { throw 'Call-list fallback gate not found in BaseEmjVariant.cs' }
+          $source = $source.Replace($oldRows, $newRows)
+          $oldLog = '        bool isPrompt = stateCode == profile.StateCodes.CallPrompt && (legal.Flags & promptFlags) != 0;'
+          $newLog = '        bool isPrompt = (stateCode == profile.StateCodes.CallPrompt || stateCode == profile.StateCodes.CallPromptList) && (legal.Flags & promptFlags) != 0;'
+          if (-not $source.Contains($oldLog)) { throw 'Call-prompt diagnostic gate not found in BaseEmjVariant.cs' }
+          $source = $source.Replace($oldLog, $newLog)
+          Set-Content -Path $variant -Value $source -NoNewline
+
+          $auto = 'Mahjong.Plugin.Dalamud/Actions/AutoPlayLoop.cs'
+          $source = Get-Content $auto -Raw
+          $oldFallback = @'
+          var fallback = forceSafePass
+                          ? ActionChoice.Pass("pass: no authoritative opponent discard")
+                          : plugin.Aggregator.Choose(plugin.MortalBridge.NormalizeForLocalFallback(snapshot));
+          '@
+          $newFallback = @'
+          if (forceSafePass)
+                      {
+                          // Do not click Pass when a live UI reaction is not corroborated by server state.
+                          // Stop automation and leave the reaction window to the player.
+                          hasMortalWait = false;
+                          choice = ActionChoice.Pass("no authoritative opponent discard; manual reaction required");
+                          LastActionDescription = "automation safety stop: opponent reaction lacks authoritative discard; manual click required";
+                          log.Warning($"[AutoPlayLoop] {LastActionDescription}");
+                          plugin.ConfigService.Update(c => c with { AutomationArmed = false, ContinuousCollection = false });
+                          return false;
+                      }
+                      var fallback = plugin.Aggregator.Choose(plugin.MortalBridge.NormalizeForLocalFallback(snapshot));
+          '@
+          if (-not $source.Contains($oldFallback)) { throw 'Mortal safe-pass fallback block not found in AutoPlayLoop.cs' }
+          $source = $source.Replace($oldFallback, $newFallback)
+          Set-Content -Path $auto -Value $source -NoNewline
+
       - name: Build plugin
         working-directory: upstream
         run: dotnet build Mahjong.Plugin.Dalamud/Mahjong.Plugin.Dalamud.csproj --configuration Release --no-restore
