@@ -114,9 +114,15 @@ jobs:
           $source = Get-Content $variant -Raw
           $oldScan = '        var labels = ScanButtonLabels(atkValues, scanLimit: profile.AtkValues.ButtonLabelScanLimit);'
           $newScan = $oldScan + "`n" +
-            '        // Generic Chinese win labels are shared by Ron/Tsumo; hand shape disambiguates them.' + "`n" +
-            '        if (hand.Count > 0 && hand.Count % 3 == 2) labels.OffersRon = false;' + "`n" +
-            '        else if (hand.Count > 0 && hand.Count % 3 == 1) labels.OffersTsumo = false;'
+            '        // Generic Chinese "胡/胡牌/和牌" labels are stored under Ron aliases.' + "`n" +
+            '        // A 3n+2 concealed hand is our draw and must classify that offer as Tsumo.' + "`n" +
+            '        if (hand.Count > 0 && hand.Count % 3 == 2 && labels.OffersRon)' + "`n" +
+            '        {' + "`n" +
+            '            labels.OffersRon = false;' + "`n" +
+            '            labels.OffersTsumo = true;' + "`n" +
+            '        }' + "`n" +
+            '        else if (hand.Count > 0 && hand.Count % 3 == 1)' + "`n" +
+            '            labels.OffersTsumo = false;'
           if (-not $source.Contains($oldScan)) { throw 'Button-label scan insertion point not found.' }
           $source = $source.Replace($oldScan, $newScan)
 
