@@ -215,6 +215,184 @@ jobs:
           '@
           Set-Content -Path 'Mahjong.Plugin.Dalamud/Composition/ConfigMigratorV3ToV4.cs' -Value $migration
 
+      - name: Enable fully automatic dispatch for CN classic action prompts
+        shell: pwsh
+        working-directory: upstream
+        run: |
+          $variant = 'Mahjong.Plugin.Dalamud/GameState/Variants/BaseEmjVariant.cs'
+          $source = Get-Content $variant -Raw
+          $oldPon = @'
+                  if (labels.OffersPon)
+                  {
+                      flags |= ActionFlags.Pon;
+                      // Only accept the exact claimed tile published by the prompt. The
+                      // Mortal bridge can rebuild candidates from the network discard;
+                      // guessing from every pair in our hand can select the wrong call.
+                      AppendPonCandidateFromAtkValues(hand, counts, atkValues, pons);
+                  }
+          '@
+          $newPon = @'
+                  if (labels.OffersPon)
+                  {
+                      // A label can exist in the localized resource table even when the
+                      // action is not available. Only expose Pon when the live claim tile
+                      // and the concealed hand produce a concrete legal candidate.
+                      AppendPonCandidateFromAtkValues(hand, counts, atkValues, pons);
+                      if (pons.Count > 0)
+                          flags |= ActionFlags.Pon;
+                  }
+          '@
+          if (-not $source.Contains($oldPon)) { throw 'Pon candidate block not found.' }
+          $source = $source.Replace($oldPon, $newPon)
+
+          $oldKan = @'
+                  if (labels.OffersKan)
+                  {
+                      flags |= ActionFlags.MinKan;
+                      AppendKanCandidate(hand, counts, kans);
+                  }
+          '@
+          $newKan = @'
+                  if (labels.OffersKan)
+                  {
+                      AppendKanCandidate(hand, counts, kans);
+                      if (kans.Count > 0)
+                          flags |= ActionFlags.MinKan;
+                  }
+          '@
+          if (-not $source.Contains($oldKan)) { throw 'Kan candidate block not found.' }
+          $source = $source.Replace($oldKan, $newKan)
+
+          $oldChi = @'
+                  if (labels.OffersChi)
+                  {
+                      flags |= ActionFlags.Chi;
+                      AppendChiCandidate(hand, atkValues, chis);
+                  }
+          '@
+          $newChi = @'
+                  if (labels.OffersChi)
+                  {
+                      AppendChiCandidate(hand, atkValues, chis);
+                      if (chis.Count > 0)
+                          flags |= ActionFlags.Chi;
+                  }
+          '@
+          if (-not $source.Contains($oldChi)) { throw 'Chi candidate block not found.' }
+          $source = $source.Replace($oldChi, $newChi)
+          Set-Content -Path $variant -Value $source -NoNewline
+
+          $dispatcher = 'Mahjong.Plugin.Dalamud/Actions/InputDispatcher.cs'
+          $source = Get-Content $dispatcher -Raw
+          $oldVisible = @'
+              /// <summary>Revalidates that the actionable call/self-declare modal is still visible immediately before a delayed dispatch.</summary>
+              public unsafe bool IsCallPromptVisible()
+              {
+                  if (!addon.TryGet(out var unit, out _) || !unit->IsVisible)
+                      return false;
+                  return IsListWidgetPopupActive(unit);
+              }
+          '@
+          $newVisible = @'
+              private unsafe bool IsClassicButtonPromptActive(AtkUnitBase* unit)
+              {
+                  if (unit == null || !unit->IsVisible || ReadStateCode(unit) != CallPromptCode)
+                      return false;
+                  var host = unit->GetNodeById(CallModalHostNodeId);
+                  return host != null && host->IsVisible() && HasClassicButtonLabels(unit);
+              }
+
+              /// <summary>True for either native list prompts (state 6/28) or the CN classic button row (state 15).</summary>
+              public unsafe bool IsClassicCallPromptVisible()
+              {
+                  return addon.TryGet(out var unit, out _) && IsClassicButtonPromptActive(unit);
+              }
+
+              /// <summary>Revalidates that the actionable call/self-declare modal is still visible immediately before a delayed dispatch.</summary>
+              public unsafe bool IsCallPromptVisible()
+              {
+                  if (!addon.TryGet(out var unit, out _) || !unit->IsVisible)
+                      return false;
+                  return IsListWidgetPopupActive(unit) || IsClassicButtonPromptActive(unit);
+              }
+          '@
+          if (-not $source.Contains($oldVisible)) { throw 'IsCallPromptVisible block not found.' }
+          $source = $source.Replace($oldVisible, $newVisible)
+
+          $oldGate = @'
+                  if (!IsListWidgetPopupActive(unit))
+                  {
+                      LastDispatchPath = "call:prompt-not-visible";
+                      return DispatchResult.HookFailed;
+                  }
+          '@
+          $newGate = @'
+                  bool isListPrompt = IsListWidgetPopupActive(unit);
+                  bool isClassicPrompt = IsClassicButtonPromptActive(unit);
+                  if (!isListPrompt && !isClassicPrompt)
+                  {
+                      LastDispatchPath = "call:prompt-not-visible";
+                      return DispatchResult.HookFailed;
+                  }
+          '@
+          if (-not $source.Contains($oldGate)) { throw 'DispatchCallOption visibility gate not found.' }
+          $source = $source.Replace($oldGate, $newGate)
+
+          $oldResolve = @'
+                  if (action is { } requested && (!TryResolveLiveCallOption(requested, out int liveOption) || option != liveOption))
+                  {
+                      LastDispatchPath = "call:option-changed-or-unobserved";
+                      return DispatchResult.HookFailed;
+                  }
+          '@
+          $newResolve = @'
+                  if (action is { } requested)
+                  {
+                      if (isListPrompt)
+                      {
+                          if (!TryResolveLiveCallOption(requested, out int liveOption) || option != liveOption)
+                          {
+                              LastDispatchPath = "call:option-changed-or-unobserved";
+                              return DispatchResult.HookFailed;
+                          }
+                      }
+                      else if (!isClassicPrompt || option < 0)
+                      {
+                          LastDispatchPath = "call:classic-option-unverified";
+                          return DispatchResult.HookFailed;
+                      }
+                  }
+          '@
+          if (-not $source.Contains($oldResolve)) { throw 'Live call option validation block not found.' }
+          $source = $source.Replace($oldResolve, $newResolve)
+          Set-Content -Path $dispatcher -Value $source -NoNewline
+
+          $auto = 'Mahjong.Plugin.Dalamud/Actions/AutoPlayLoop.cs'
+          $source = Get-Content $auto -Raw
+          $oldRefresh = @'
+                  if (observed is not null
+                      && plugin.Dispatcher.IsCallPromptVisible()
+                      && !(kind == ActionKind.Ron && plugin.MortalBridge.HasExpiredReactionWindow(current))
+                      && TryResolveCallOption(decision, current, kind, out option)
+                      && plugin.Dispatcher.TryResolveLiveCallOption(kind, out option))
+                      return true;
+          '@
+          $newRefresh = @'
+                  bool resolvedDecisionOption = observed is not null
+                      && TryResolveCallOption(decision, current, kind, out option);
+                  bool liveOptionVerified = plugin.Dispatcher.IsClassicCallPromptVisible()
+                      || (plugin.Dispatcher.TryResolveLiveCallOption(kind, out int liveOption) && option == liveOption);
+                  if (observed is not null
+                      && plugin.Dispatcher.IsCallPromptVisible()
+                      && !(kind == ActionKind.Ron && plugin.MortalBridge.HasExpiredReactionWindow(current))
+                      && resolvedDecisionOption
+                      && liveOptionVerified)
+                      return true;
+          '@
+          if (-not $source.Contains($oldRefresh)) { throw 'TryRefreshCallDispatch validation block not found.' }
+          $source = $source.Replace($oldRefresh, $newRefresh)
+          Set-Content -Path $auto -Value $source -NoNewline
+
       - name: Build plugin
         working-directory: upstream
         run: dotnet build Mahjong.Plugin.Dalamud/Mahjong.Plugin.Dalamud.csproj --configuration Release --no-restore
