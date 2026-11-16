@@ -413,6 +413,27 @@ jobs:
           $source = $source.Replace($oldHint, $newHint)
           Set-Content -Path $window -Value $source -NoNewline
 
+      - name: Remove unused packet, memory and training settings cards
+        shell: pwsh
+        working-directory: upstream
+        run: |
+          $window = 'Mahjong.Plugin.Dalamud/UI/SettingsWindow.cs'
+          $source = Get-Content $window -Raw
+          $ranges = @(
+            @('        using (Theme.BeginCard("settings-training-data"))', '        using (Theme.BeginCard("settings-mortal"))'),
+            @('        using (Theme.BeginCard("settings-packet-debug"))', '        using (Theme.BeginCard("settings-memdumps"))'),
+            @('        using (Theme.BeginCard("settings-memdumps"))', '        using (Theme.BeginCard("settings-appearance"))')
+          )
+          foreach ($range in $ranges) {
+              $start = $source.IndexOf($range[0])
+              $end = $source.IndexOf($range[1], $start + $range[0].Length)
+              if ($start -lt 0 -or $end -lt 0 -or $end -le $start) {
+                  throw "Could not find settings card range: $($range[0]) -> $($range[1])"
+              }
+              $source = $source.Remove($start, $end - $start)
+          }
+          Set-Content -Path $window -Value $source -NoNewline
+
       - name: Build plugin
         working-directory: upstream
         run: dotnet build Mahjong.Plugin.Dalamud/Mahjong.Plugin.Dalamud.csproj --configuration Release --no-restore
