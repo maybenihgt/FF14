@@ -137,39 +137,24 @@ jobs:
 
           $auto = 'Mahjong.Plugin.Dalamud/Actions/AutoPlayLoop.cs'
           $source = Get-Content $auto -Raw
-          $oldWin = @'
-                      hasMortalWait = false;
-                      plugin.Aggregator.PublishLocalExecution(snapshot, choice, "terminal-guard");
-                      return true;
-                  }
-              }
-          '@
-          $newWin = @'
-                      hasMortalWait = false;
-                      plugin.Aggregator.PublishLocalExecution(snapshot, choice, "terminal-guard");
-                      return true;
-                  }
-
-                  // A live, parsed win button is authoritative UI evidence. Do not wait for
-                  // Mortal's public discard stream to approve a win already offered by the game.
-                  if (snapshot.Legal.Can(ActionFlags.Tsumo))
-                  {
-                      choice = ActionChoice.DeclareTsumo("game UI exposed a legal Tsumo action");
-                      hasMortalWait = false;
-                      plugin.Aggregator.PublishLocalExecution(snapshot, choice, "terminal-guard");
-                      return true;
-                  }
-                  if (snapshot.Legal.Can(ActionFlags.Ron))
-                  {
-                      choice = ActionChoice.DeclareRon("game UI exposed a legal Ron action");
-                      hasMortalWait = false;
-                      plugin.Aggregator.PublishLocalExecution(snapshot, choice, "terminal-guard");
-                      return true;
-                  }
-              }
-          '@
-          if (-not $source.Contains($oldWin)) { throw 'Terminal-win selection insertion point not found.' }
-          $source = $source.Replace($oldWin, $newWin)
+          $anchorWin = '        if (plugin.MortalBridge.Enabled && !plugin.MortalBridge.CurrentHandQuarantined)'
+          $forceWin = '        // The live game UI has already exposed a legal win action. Do not wait for Mortal.' + "`n" +
+            '        if (snapshot.Legal.Can(ActionFlags.Tsumo))' + "`n" +
+            '        {' + "`n" +
+            '            choice = ActionChoice.DeclareTsumo("game UI exposed a legal Tsumo action");' + "`n" +
+            '            hasMortalWait = false;' + "`n" +
+            '            plugin.Aggregator.PublishLocalExecution(snapshot, choice, "terminal-guard");' + "`n" +
+            '            return true;' + "`n" +
+            '        }' + "`n" +
+            '        if (snapshot.Legal.Can(ActionFlags.Ron))' + "`n" +
+            '        {' + "`n" +
+            '            choice = ActionChoice.DeclareRon("game UI exposed a legal Ron action");' + "`n" +
+            '            hasMortalWait = false;' + "`n" +
+            '            plugin.Aggregator.PublishLocalExecution(snapshot, choice, "terminal-guard");' + "`n" +
+            '            return true;' + "`n" +
+            '        }' + "`n" + "`n"
+          if (-not $source.Contains($anchorWin)) { throw 'Terminal-win fallback insertion point not found.' }
+          $source = $source.Replace($anchorWin, $forceWin + $anchorWin)
           Set-Content -Path $auto -Value $source -NoNewline
 
       - name: Build plugin
