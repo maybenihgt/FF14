@@ -110,6 +110,27 @@ public sealed class MainWindow : Window, IDisposable
         ImGui.Text("游戏数据读取：手动录入；UI Addon 事件探测已加入");
     }
 
+    private void DrawAddonProbe()
+    {
+        ImGui.TextWrapped("记录游戏 UI Addon 的创建和打开事件，用于定位日服多玛麻将窗口的内部名称。");
+        ImGui.TextDisabled("请打开多玛麻将界面并进入一局，然后查看新增事件。此探针不读取隐藏牌局信息，也不会自动操作。");
+        ImGui.Separator();
+        var events = plugin.RecentAddonEvents;
+        ImGui.Text($"已捕获事件：{events.Count}");
+        if (ImGui.Button("复制事件列表"))
+            ImGui.SetClipboardText(string.Join(Environment.NewLine, events));
+        ImGui.BeginChild("##addonEvents", new Vector2(0, 260), true);
+        foreach (var item in events.Reverse())
+        {
+            bool likely = item.Contains("Mahjong", StringComparison.OrdinalIgnoreCase) ||
+                          item.Contains("Emj", StringComparison.OrdinalIgnoreCase) ||
+                          item.Contains("Doman", StringComparison.OrdinalIgnoreCase);
+            if (likely) ImGui.TextColored(new Vector4(0.3f, 1f, 0.5f, 1f), item);
+            else ImGui.TextDisabled(item);
+        }
+        ImGui.EndChild();
+    }
+
     private void DrawNotes()
     {
         ImGui.TextWrapped("本插件不需要外部 AI 环境、授权服务器或模型文件。分析数据由玩家手动输入自己可见的手牌。");
