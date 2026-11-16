@@ -18,6 +18,10 @@ jobs:
         with:
           path: integration-repo
 
+      - name: Test consent-gated 2v2 analysis relay
+        working-directory: integration-repo
+        run: python -m unittest backend.test_team_room -v
+
       - name: Checkout pinned upstream source
         uses: actions/checkout@v4
         with:
