@@ -49,6 +49,14 @@ jobs:
         working-directory: upstream
         run: dotnet restore Mahjong.Plugin.Dalamud.sln --locked-mode
 
+      # This optional diagnostic reader targets an Emj FFXIVClientStructs namespace
+      # that is absent from the pinned Dalamud/FFXIVClientStructs build. It is not
+      # referenced by the live addon reader; omit it so the plugin can compile.
+      - name: Exclude incompatible optional Emj table probe
+        shell: pwsh
+        working-directory: upstream
+        run: Remove-Item Mahjong.Plugin.Dalamud/GameState/EmjTableReader.cs -Force
+
       - name: Build plugin
         working-directory: upstream
         run: dotnet build Mahjong.Plugin.Dalamud/Mahjong.Plugin.Dalamud.csproj --configuration Release --no-restore
