@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Consent-gated 2v2 mahjong analysis rooms for sandbox/replay sessions only.
+"""Consent-gated 2v2 score tracking and optional sandbox-state sharing.
 
 This relay is deliberately not a game client, packet reader, or input dispatcher.
 It accepts only self-reported snapshots from four opted-in participants and
@@ -31,6 +31,11 @@ class Participant:
     consent: bool = False
     snapshot: dict | None = None
     updated_at: float = 0.0
+    current_rating: int | None = None
+    peak_rating: int | None = None
+    games: int = 0
+    total_delta: int = 0
+    last_delta: int | None = None
 
 
 @dataclass
@@ -61,6 +66,13 @@ def public_room(room: Room, reveal_snapshots: bool) -> dict:
             "consent": participant.consent,
             "has_snapshot": participant.snapshot is not None,
             "updated_at": participant.updated_at or None,
+            "score": {
+                "current_rating": participant.current_rating,
+                "peak_rating": participant.peak_rating,
+                "games": participant.games,
+                "total_delta": participant.total_delta,
+                "last_delta": participant.last_delta,
+            },
         }
         if reveal_snapshots and participant.snapshot is not None:
             item["snapshot"] = participant.snapshot
@@ -75,6 +87,10 @@ def public_room(room: Room, reveal_snapshots: bool) -> dict:
         },
         "participants": members,
         "snapshots_visible": reveal_snapshots,
+        "team_score_totals": {
+            team: sum(p.current_rating or 0 for p in room.participants.values() if p.team == team)
+            for team in ("A", "B")
+        },
     }
 
 
@@ -109,7 +125,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         path = urlparse(self.path).path
         if path == "/health":
-            return self.reply(200, {"status": "ok", "mode": "sandbox/replay-only", "rooms_in_memory": len(rooms)})
+            return self.reply(200, {"status": "ok", "features": ["2v2-score-tracking", "sandbox-state-sharing"], "rooms_in_memory": len(rooms)})
         parts = path.strip("/").split("/")
         if len(parts) != 3 or parts[:2] != ["v1", "team-rooms"]:
             return self.reply(404, {"error": "not_found"})
@@ -131,8 +147,8 @@ class Handler(BaseHTTPRequestHandler):
             with lock:
                 clean_expired()
                 if path == "/v1/team-rooms":
-                    if data.get("mode") not in ("sandbox", "replay"):
-                        return self.reply(400, {"error": "mode_must_be_sandbox_or_replay"})
+                    if data.get("mode") != "sandbox":
+                        return self.reply(400, {"error": "mode_must_be_sandbox"})
                     if data.get("consent") is not True:
                         return self.reply(400, {"error": "creator_must_explicitly_consent"})
                     if len(rooms) >= MAX_ROOMS:
@@ -148,7 +164,7 @@ class Handler(BaseHTTPRequestHandler):
                     room.participants[token[:12]] = Participant(name, team, token, True)
                     rooms[room_id] = room
                     return self.reply(201, {"room_id": room_id, "invite_code": invite, "participant_token": token,
-                                            "mode": room.mode, "note": "Share invite_code only with the other three consenting sandbox/replay participants."})
+                                            "mode": room.mode, "note": "Share invite_code only with the other three consenting sandbox participants."})
 
                 parts = path.strip("/").split("/")
                 if len(parts) == 4 and parts[:2] == ["v1", "team-rooms"]:
@@ -183,6 +199,28 @@ class Handler(BaseHTTPRequestHandler):
                             return self.reply(400, {"error": "consent_cannot_be_withdrawn_via_this_endpoint; leave_or_delete_room"})
                         participant.consent = True
                         return self.reply(200, {"consent": True})
+                    if action == "score":
+                        if not participant.consent:
+                            return self.reply(403, {"error": "consent_required"})
+                        rating = data.get("rating")
+                        if isinstance(rating, bool) or not isinstance(rating, int) or rating < 0:
+                            return self.reply(400, {"error": "rating_must_be_a_non_negative_integer"})
+                        previous = participant.current_rating
+                        delta = 0 if previous is None else rating - previous
+                        participant.current_rating = rating
+                        participant.peak_rating = rating if participant.peak_rating is None else max(participant.peak_rating, rating)
+                        participant.games += 1
+                        participant.total_delta += delta
+                        participant.last_delta = delta
+                        participant.updated_at = time.time()
+                        return self.reply(200, {
+                            "name": participant.name,
+                            "current_rating": participant.current_rating,
+                            "peak_rating": participant.peak_rating,
+                            "games": participant.games,
+                            "last_delta": participant.last_delta,
+                            "total_delta": participant.total_delta,
+                        })
                     if action == "snapshot":
                         if not participant.consent:
                             return self.reply(403, {"error": "consent_required"})
