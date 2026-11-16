@@ -248,12 +248,7 @@ jobs:
 
           $auto = 'Mahjong.Plugin.Dalamud/Actions/AutoPlayLoop.cs'
           $source = Get-Content $auto -Raw
-          $anchorObserve = @'
-                  LastObservedState = state;
-                  LastObservedHandCount = context.Hand;
-
-                  if (state == ChiVariantSelectStateCode)
-          '@
+          $anchorObserve = '        LastObservedState = state;' + "`n" + '        LastObservedHandCount = context.Hand;' + "`n" + "`n" + '        if (state == ChiVariantSelectStateCode)'
           $insertObserve = @'
                   LastObservedState = state;
                   LastObservedHandCount = context.Hand;
@@ -275,10 +270,7 @@ jobs:
           if (-not $source.Contains($anchorObserve)) { throw 'AutoPlayLoop observation insertion point not found.' }
           $source = $source.Replace($anchorObserve, $insertObserve)
 
-          $anchorDiscard = @'
-                      int currentState = ReadStateCode();
-                      bool isTerminalWin = snap is not null
-          '@
+          $anchorDiscard = '            int currentState = ReadStateCode();' + "`n" + '            bool isTerminalWin = snap is not null'
           $insertDiscard = @'
                       int currentState = ReadStateCode();
                       if (plugin.Dispatcher.HasManualChoicePrompt())
@@ -291,10 +283,7 @@ jobs:
           if (-not $source.Contains($anchorDiscard)) { throw 'ScheduleDiscard guard insertion point not found.' }
           $source = $source.Replace($anchorDiscard, $insertDiscard)
 
-          $anchorCall = @'
-                      int currentState = ReadStateCode();
-                      if (snap is null)
-          '@
+          $anchorCall = '            int currentState = ReadStateCode();' + "`n" + '            if (snap is null)'
           $insertCall = @'
                       int currentState = ReadStateCode();
                       if (plugin.Dispatcher.HasManualChoicePrompt())
