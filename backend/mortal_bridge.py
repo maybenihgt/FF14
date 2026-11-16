@@ -68,7 +68,7 @@ class Session:
                 raise RuntimeError("Mortal process exited; reset this session")
             assert self.proc.stdin is not None
             for event in events:
-                self.proc.stdin.write(json.dumps(event, separators=(",", ":"), ensure_ascii=False) + "\\n")
+                self.proc.stdin.write(json.dumps(event, separators=(",", ":"), ensure_ascii=False) + "\n")
             self.proc.stdin.flush()
 
             # Mortal emits output only when an event produces a reaction.
