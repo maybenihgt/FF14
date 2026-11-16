@@ -100,7 +100,7 @@ jobs:
                 return false;
             }
             var fallback = plugin.Aggregator.Choose(plugin.MortalBridge.NormalizeForLocalFallback(snapshot));
-"@
+          "@
           $updated = [regex]::Replace($source, $pattern, [System.Text.RegularExpressions.MatchEvaluator]{ param($m) $replacement }, 1)
           if ($updated -eq $source) { throw 'Mortal safe-pass fallback pattern did not match AutoPlayLoop.cs' }
           $source = $updated
