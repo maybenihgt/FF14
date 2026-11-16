@@ -5,7 +5,7 @@ import urllib.error
 import urllib.request
 from http.server import ThreadingHTTPServer
 
-import team_room
+from backend import team_room
 
 
 class TeamRoomApiTests(unittest.TestCase):
