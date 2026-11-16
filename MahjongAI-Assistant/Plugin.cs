@@ -23,6 +23,9 @@ public sealed class Plugin : IDalamudPlugin
     private readonly MainWindow mainWindow;
     private readonly ConcurrentQueue<string> addonEvents = new();
     private readonly IAddonLifecycle.AddonEventDelegate addonSetupHandler;
+    private readonly HttpClient httpClient = new() { Timeout = TimeSpan.FromSeconds(3) };
+    public string MortalBridgeStatus { get; private set; } = "尚未检测";
+    public bool IsCheckingMortalBridge { get; private set; }
 
     public IReadOnlyList<string> RecentAddonEvents => addonEvents.ToArray();
 
@@ -44,6 +47,27 @@ public sealed class Plugin : IDalamudPlugin
         PluginInterface.UiBuilder.OpenMainUi += mainWindow.Toggle;
     }
 
+
+    public async Task CheckMortalBridgeAsync()
+    {
+        if (IsCheckingMortalBridge) return;
+        IsCheckingMortalBridge = true;
+        try
+        {
+            var baseUrl = Configuration.MortalBridgeUrl.TrimEnd('/');
+            using var response = await httpClient.GetAsync($"{baseUrl}/health");
+            var body = await response.Content.ReadAsStringAsync();
+            MortalBridgeStatus = response.IsSuccessStatusCode
+                ? $"已连接：{body}"
+                : $"服务未就绪（HTTP {(int)response.StatusCode}）：{body}";
+        }
+        catch (Exception ex)
+        {
+            MortalBridgeStatus = $"连接失败：{ex.Message}";
+        }
+        finally { IsCheckingMortalBridge = false; }
+    }
+
     private void OnAddonSetup(AddonEvent type, AddonArgs args)
     {
         if (string.IsNullOrWhiteSpace(args.AddonName))
@@ -61,5 +85,6 @@ public sealed class Plugin : IDalamudPlugin
         CommandManager.RemoveHandler(CommandName);
         windowSystem.RemoveAllWindows();
         mainWindow.Dispose();
+        httpClient.Dispose();
     }
 }
