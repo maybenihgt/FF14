@@ -434,6 +434,46 @@ jobs:
           }
           Set-Content -Path $window -Value $source -NoNewline
 
+      - name: Correct tile overlay mapping and show call decisions
+        shell: pwsh
+        working-directory: upstream
+        run: |
+          $overlay = 'Mahjong.Plugin.Dalamud/UI/HandOverlay.cs'
+          $source = Get-Content $overlay -Raw
+          $old = '            if (n == null || !n->IsVisible())' + "`n" + '                continue;'
+          $new = $old + "`n" +
+            '            // CN Emj dump identifies concealed-hand tile components as type 1055.' + "`n" +
+            '            // Ignore other tile-sized nodes (discard rows, wall, call tiles, indicators),' + "`n" +
+            '            // otherwise the X-sorted overlay row can shift by one tile.' + "`n" +
+            '            if ((int)n->Type != 1055)' + "`n" +
+            '                continue;'
+          if (-not $source.Contains($old)) { throw 'Hand overlay candidate filter anchor not found.' }
+          $source = $source.Replace($old, $new)
+          Set-Content -Path $overlay -Value $source -NoNewline
+
+          $window = 'Mahjong.Plugin.Dalamud/UI/MainWindow.cs'
+          $source = Get-Content $window -Raw
+          $oldCaption = '        Theme.Caption(Loc.T("Best move", "最佳打法"));'
+          $newCaption = '        Theme.Caption(Loc.T("Best move / action", "最佳打牌 / 鸣牌动作"));'
+          if (-not $source.Contains($oldCaption)) { throw 'Main window suggestion caption not found.' }
+          $source = $source.Replace($oldCaption, $newCaption)
+
+          $oldGate = '        if (!snap.Legal.Can(ActionFlags.Discard))' + "`n" +
+            '        {' + "`n" +
+            '            Theme.Subtle(Loc.T($"Waiting for your turn ({snap.Hand.Count} tiles in hand).", $"等待轮到你（手牌 {snap.Hand.Count} 张）。"));' + "`n" +
+            '            return;' + "`n" +
+            '        }'
+          $newGate = '        const ActionFlags responseActions = ActionFlags.Pon | ActionFlags.Chi | ActionFlags.MinKan | ActionFlags.ShouMinKan | ActionFlags.AnKan | ActionFlags.Ron | ActionFlags.Riichi | ActionFlags.Tsumo;' + "`n" +
+            '        bool hasResponseAction = (snap.Legal.Flags & responseActions) != ActionFlags.None;' + "`n" +
+            '        if (!snap.Legal.Can(ActionFlags.Discard) && !hasResponseAction)' + "`n" +
+            '        {' + "`n" +
+            '            Theme.Subtle(Loc.T($"Waiting for your turn ({snap.Hand.Count} tiles in hand).", $"等待轮到你（手牌 {snap.Hand.Count} 张）。"));' + "`n" +
+            '            return;' + "`n" +
+            '        }'
+          if (-not $source.Contains($oldGate)) { throw 'Main window no-discard wait gate not found.' }
+          $source = $source.Replace($oldGate, $newGate)
+          Set-Content -Path $window -Value $source -NoNewline
+
       - name: Build plugin
         working-directory: upstream
         run: dotnet build Mahjong.Plugin.Dalamud/Mahjong.Plugin.Dalamud.csproj --configuration Release --no-restore
