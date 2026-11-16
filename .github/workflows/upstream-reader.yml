@@ -49,13 +49,19 @@ jobs:
         working-directory: upstream
         run: dotnet restore Mahjong.Plugin.Dalamud.sln --locked-mode
 
-      # This optional diagnostic reader targets an Emj FFXIVClientStructs namespace
-      # that is absent from the pinned Dalamud/FFXIVClientStructs build. It is not
-      # referenced by the live addon reader; omit it so the plugin can compile.
-      - name: Exclude incompatible optional Emj table probe
+      # The optional table-score probe uses an Emj FFXIVClientStructs namespace
+      # absent from the pinned SDK. Remove only its optional delegate hookup;
+      # keep the main addon reader and the source file untouched.
+      - name: Disable optional Emj table-score probe hookup
         shell: pwsh
         working-directory: upstream
-        run: Remove-Item Mahjong.Plugin.Dalamud/GameState/EmjTableReader.cs -Force
+        run: |
+          $file = 'Mahjong.Plugin.Dalamud/Plugin.cs'
+          $source = Get-Content $file -Raw
+          $old = '            tableScores: EmjTableReader.ReadPoints);'
+          if (-not $source.Contains($old)) { throw 'Expected optional EmjTableReader hookup was not found.' }
+          $source = $source.Replace($old, '            tableScores: null);')
+          Set-Content -Path $file -Value $source -NoNewline
 
       - name: Build plugin
         working-directory: upstream
