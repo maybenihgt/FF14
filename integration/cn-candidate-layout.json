@@ -1,6 +1,6 @@
 {
   "name": "EmjCN-Candidate",
-  "addonName": "EmjL",
+  "addonName": "Emj",
   "tileTextureBase": 76041,
   "offsets": {
     "selfScore": "0x0500",
@@ -29,7 +29,7 @@
     "ponClaimScanLo": 16,
     "ponClaimScanHi": 21,
     "chiFallbackScanLimit": 30,
-    "buttonLabelScanLimit": 20
+    "buttonLabelScanLimit": 50
   },
   "stateCodes": {
     "ourTurnDiscard": 30,
@@ -50,29 +50,41 @@
   "actionLabels": {
     "pon": [
       "碰",
+      "碰！",
+      "碰!",
       "Pon",
       "ポン",
       "ポン!"
     ],
     "chi": [
       "吃",
+      "吃！",
+      "吃!",
       "Chi",
       "チー",
       "チー!"
     ],
     "kan": [
       "杠",
+      "杠！",
+      "杠!",
       "槓",
+      "槓！",
       "Kan",
       "カン",
       "カン!"
     ],
     "ron": [
       "荣和",
+      "荣和！",
       "榮和",
+      "榮和！",
       "胡",
+      "胡！",
       "胡牌",
+      "胡牌！",
       "和牌",
+      "和牌！",
       "和了",
       "Ron",
       "ロン",
@@ -80,17 +92,22 @@
     ],
     "riichi": [
       "立直",
+      "立直！",
       "Riichi",
       "リーチ",
       "リーチ!!"
     ],
     "tsumo": [
       "自摸",
+      "自摸！",
       "自摸胡",
       "摸和",
       "胡",
+      "胡！",
       "胡牌",
+      "胡牌！",
       "和牌",
+      "和牌！",
       "和了",
       "Tsumo",
       "ツモ",
@@ -98,13 +115,20 @@
     ],
     "pass": [
       "放弃",
+      "放弃！",
       "放棄",
       "过",
       "過",
       "取消",
-      "キャンセル",
+      "跳过",
+      "跳過",
+      "不吃",
+      "不碰",
       "パス",
       "Pass"
     ]
-  }
+  },
+  "clientLanguages": [
+    "ChineseSimplified"
+  ]
 }
