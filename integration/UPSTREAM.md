@@ -57,3 +57,8 @@ The intended user mode is automatic discard assistance with manual user choice a
 ## Continuous auto-queue manual opt-in
 
 On every plugin load, startup configuration initialization resets `ContinuousCollection` to false before the collection loop is constructed. The queue loop therefore stays idle after launching/reloading the plugin until the user explicitly checks the `Auto-queue, commence and repeat until stopped` checkbox. Checking it still invokes the existing `Collection.Start()` flow; unchecking invokes `Stop()`. The settings hint now states that it will not auto-start after reload.
+
+
+## Hide unused local-capture settings UI
+
+The CN candidate build removes the SettingsWindow cards for Debug packet logger, Memory snapshots, and Training data archive. Their internal services and configuration fields remain for source compatibility but are not user-configurable from this build's normal settings UI; privacy-sensitive options stay disabled by default. Existing files in `debug-packets`, `memdumps`, and `training-data` are not automatically deleted when recording is disabled or the UI is hidden. The user may manually delete old files after closing the game/plugin if they no longer want them.
