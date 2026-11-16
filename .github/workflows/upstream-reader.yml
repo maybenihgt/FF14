@@ -170,6 +170,51 @@ jobs:
           $source = $prefix + $tail
           Set-Content -Path $auto -Value $source -NoNewline
 
+      - name: Apply privacy-safe defaults and migrate existing settings
+        shell: pwsh
+        working-directory: upstream
+        run: |
+          $config = 'Mahjong.Plugin.Dalamud/Configuration.cs'
+          $source = Get-Content $config -Raw
+          $oldVersion = 'public const int CurrentSchemaVersion = 3;'
+          if (-not $source.Contains($oldVersion)) { throw 'Configuration schema version 3 marker not found.' }
+          $source = $source.Replace($oldVersion, 'public const int CurrentSchemaVersion = 4;')
+          $oldTraining = 'public bool RetainTrainingData { get; init; } = true;'
+          if (-not $source.Contains($oldTraining)) { throw 'Training data default marker not found.' }
+          $source = $source.Replace($oldTraining, 'public bool RetainTrainingData { get; init; } = false;')
+          Set-Content -Path $config -Value $source -NoNewline
+
+          $plugin = 'Mahjong.Plugin.Dalamud/Plugin.cs'
+          $source = Get-Content $plugin -Raw
+          $oldMigrator = '            new ConfigMigratorV2ToV3(),'
+          if (-not $source.Contains($oldMigrator)) { throw 'Config migrator registration marker not found.' }
+          $source = $source.Replace($oldMigrator, $oldMigrator + "`n" + '            new ConfigMigratorV3ToV4(),')
+          Set-Content -Path $plugin -Value $source -NoNewline
+
+          $migration = @'
+          using Mahjong.Plugin.Game;
+
+          namespace Mahjong.Plugin.Dalamud.Composition;
+
+          /// <summary>Disables optional packet, memory and training collection, and experimental search for the CN candidate build.</summary>
+          internal sealed class ConfigMigratorV3ToV4 : IConfigMigrator<Configuration>
+          {
+              public int FromVersion => 3;
+              public int ToVersion => 4;
+
+              public Configuration Migrate(Configuration input) => input with
+              {
+                  Version = ToVersion,
+                  DebugAutoPacketLogging = false,
+                  MemoryDumpsEnabled = false,
+                  RetainTrainingData = false,
+                  EnhancedStrategy = false,
+                  EnhancedShadowOnly = true,
+              };
+          }
+          '@
+          Set-Content -Path 'Mahjong.Plugin.Dalamud/Composition/ConfigMigratorV3ToV4.cs' -Value $migration
+
       - name: Build plugin
         working-directory: upstream
         run: dotnet build Mahjong.Plugin.Dalamud/Mahjong.Plugin.Dalamud.csproj --configuration Release --no-restore
