@@ -8,17 +8,31 @@ jobs:
   build:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-dotnet@v4
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install .NET 10
+        uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
+
+      - name: Download Dalamud SDK files
+        shell: pwsh
+        run: |
+          $target = Join-Path $env:APPDATA 'XIVLauncher\addon\Hooks\dev'
+          New-Item -ItemType Directory -Force -Path $target | Out-Null
+          Invoke-WebRequest -Uri 'https://goatcorp.github.io/dalamud-distrib/latest.zip' -OutFile 'dalamud-latest.zip'
+          Expand-Archive -Path 'dalamud-latest.zip' -DestinationPath $target -Force
+
       - name: Build plugin
         run: dotnet build MahjongAI-Assistant/MahjongAI-Assistant.csproj -c Release
+
       - name: Upload build output
         uses: actions/upload-artifact@v4
         with:
           name: Mahjong-AI-Assistant-Dalamud-API15
           path: |
-            MahjongAI-Assistant/bin/Release/**/MahjongAI-Assistant.dll
-            MahjongAI-Assistant/bin/Release/**/MahjongAI-Assistant.json
-            MahjongAI-Assistant/bin/Release/**/MahjongAI-Assistant.deps.json
+            MahjongAI-Assistant/bin/Release/**/*.dll
+            MahjongAI-Assistant/bin/Release/**/*.json
+          if-no-files-found: error
+          retention-days: 7
