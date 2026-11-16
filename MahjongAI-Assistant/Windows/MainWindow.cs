@@ -31,6 +31,7 @@ public sealed class MainWindow : Window, IDisposable
         if (ImGui.BeginTabItem("分析")) { DrawAnalyzer(); ImGui.EndTabItem(); }
         if (ImGui.BeginTabItem("账号")) { DrawAccounts(); ImGui.EndTabItem(); }
         if (ImGui.BeginTabItem("状态")) { DrawStatus(); ImGui.EndTabItem(); }
+        if (ImGui.BeginTabItem("识别探针")) { DrawAddonProbe(); ImGui.EndTabItem(); }
         if (ImGui.BeginTabItem("说明")) { DrawNotes(); ImGui.EndTabItem(); }
         ImGui.EndTabBar();
     }
@@ -100,13 +101,13 @@ public sealed class MainWindow : Window, IDisposable
 
     private void DrawStatus()
     {
-        ImGui.Text("Mahjong AI Assistant 1.0");
+        ImGui.Text("Mahjong AI Assistant 1.1 · Addon Probe");
         ImGui.Separator();
         ImGui.Text($"电脑：{Environment.MachineName}");
         ImGui.Text($"本地标签：{plugin.Configuration.AccountId}");
         ImGui.Text($"FFXIV 玩家状态：{(Plugin.PlayerState.IsLoaded ? "已登录" : "未登录")}");
         ImGui.Text("分析引擎：内置轻量算法（无需模型下载）");
-        ImGui.Text("游戏数据读取：手动录入");
+        ImGui.Text("游戏数据读取：手动录入；UI Addon 事件探测已加入");
     }
 
     private void DrawNotes()
