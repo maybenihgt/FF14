@@ -440,15 +440,18 @@ jobs:
         run: |
           $overlay = 'Mahjong.Plugin.Dalamud/UI/HandOverlay.cs'
           $source = Get-Content $overlay -Raw
-          $old = '            if (n == null || !n->IsVisible())' + "`n" + '                continue;'
-          $new = $old + "`n" +
-            '            // CN Emj dump identifies concealed-hand tile components as type 1055.' + "`n" +
-            '            // Ignore other tile-sized nodes (discard rows, wall, call tiles, indicators),' + "`n" +
-            '            // otherwise the X-sorted overlay row can shift by one tile.' + "`n" +
-            '            if ((int)n->Type != 1055)' + "`n" +
-            '                continue;'
-          if (-not $source.Contains($old)) { throw 'Hand overlay candidate filter anchor not found.' }
-          $source = $source.Replace($old, $new)
+          $pattern = '(?m)^(\s*)if \(n == null \|\| !n->IsVisible\(\)\)\r?\n\s*continue;'
+          $insert = @'
+          $1if (n == null || !n->IsVisible())
+          $1    continue;
+          $1// CN Emj dump: the concealed-hand tile components are children of hand row node 133.
+          $1// Filter to this exact subtree so discard rows, wall tiles and call tiles cannot shift the highlight.
+          $1if ((int)n->Type != 1055 || !HasAncestorId(n, 133u))
+          $1    continue;
+          '@
+          $updated = [regex]::Replace($source, $pattern, [System.Text.RegularExpressions.MatchEvaluator]{ param($m) $insert.Replace('$1', $m.Groups[1].Value) }, 1)
+          if ($updated -eq $source) { throw 'Hand overlay candidate filter regex did not match.' }
+          $source = $updated
           Set-Content -Path $overlay -Value $source -NoNewline
 
           $window = 'Mahjong.Plugin.Dalamud/UI/MainWindow.cs'
@@ -458,20 +461,19 @@ jobs:
           if (-not $source.Contains($oldCaption)) { throw 'Main window suggestion caption not found.' }
           $source = $source.Replace($oldCaption, $newCaption)
 
-          $oldGate = '        if (!snap.Legal.Can(ActionFlags.Discard))' + "`n" +
-            '        {' + "`n" +
-            '            Theme.Subtle(Loc.T($"Waiting for your turn ({snap.Hand.Count} tiles in hand).", $"等待轮到你（手牌 {snap.Hand.Count} 张）。"));' + "`n" +
-            '            return;' + "`n" +
-            '        }'
-          $newGate = '        const ActionFlags responseActions = ActionFlags.Pon | ActionFlags.Chi | ActionFlags.MinKan | ActionFlags.ShouMinKan | ActionFlags.AnKan | ActionFlags.Ron | ActionFlags.Riichi | ActionFlags.Tsumo;' + "`n" +
-            '        bool hasResponseAction = (snap.Legal.Flags & responseActions) != ActionFlags.None;' + "`n" +
-            '        if (!snap.Legal.Can(ActionFlags.Discard) && !hasResponseAction)' + "`n" +
-            '        {' + "`n" +
-            '            Theme.Subtle(Loc.T($"Waiting for your turn ({snap.Hand.Count} tiles in hand).", $"等待轮到你（手牌 {snap.Hand.Count} 张）。"));' + "`n" +
-            '            return;' + "`n" +
-            '        }'
-          if (-not $source.Contains($oldGate)) { throw 'Main window no-discard wait gate not found.' }
-          $source = $source.Replace($oldGate, $newGate)
+          $patternGate = '(?s)        if \(!snap\.Legal\.Can\(ActionFlags\.Discard\)\)\r?\n        \{\r?\n            Theme\.Subtle\(Loc\.T\(\$"Waiting for your turn \(\{snap\.Hand\.Count\} tiles in hand\)\.", \$"等待轮到你（手牌 \{snap\.Hand\.Count\} 张）。"\)\);\r?\n            return;\r?\n        \}'
+          $newGate = @'
+                  const ActionFlags responseActions = ActionFlags.Pon | ActionFlags.Chi | ActionFlags.MinKan | ActionFlags.ShouMinKan | ActionFlags.AnKan | ActionFlags.Ron | ActionFlags.Riichi | ActionFlags.Tsumo;
+                  bool hasResponseAction = (snap.Legal.Flags & responseActions) != ActionFlags.None;
+                  if (!snap.Legal.Can(ActionFlags.Discard) && !hasResponseAction)
+                  {
+                      Theme.Subtle(Loc.T($"Waiting for your turn ({snap.Hand.Count} tiles in hand).", $"等待轮到你（手牌 {snap.Hand.Count} 张）。"));
+                      return;
+                  }
+          '@
+          $updated = [regex]::Replace($source, $patternGate, $newGate.TrimEnd(), 1)
+          if ($updated -eq $source) { throw 'Main window no-discard wait gate regex did not match.' }
+          $source = $updated
           Set-Content -Path $window -Value $source -NoNewline
 
       - name: Build plugin
