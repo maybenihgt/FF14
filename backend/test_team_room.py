@@ -67,15 +67,22 @@ class TeamRoomApiTests(unittest.TestCase):
 
         _, a2 = self.join(owner, "A2", "A")
         _, b1 = self.join(owner, "B1", "B")
-        _, b2 = self.join(owner, "B2", "B")
-        for member in (a2, b1, b2):
-            self.assertIn("participant_token", member)
+        self.assertIn("participant_token", a2)
+        self.assertIn("participant_token", b1)
 
         status, room = self.request(
             f"/v1/team-rooms/{owner['room_id']}", token=owner["participant_token"])
         self.assertEqual(status, 200)
         self.assertFalse(room["snapshots_visible"])
         self.assertNotIn("snapshot", room["participants"][0])
+
+        _, b2 = self.join(owner, "B2", "B")
+        self.assertIn("participant_token", b2)
+        status, room = self.request(
+            f"/v1/team-rooms/{owner['room_id']}", token=owner["participant_token"])
+        self.assertEqual(status, 200)
+        self.assertTrue(room["snapshots_visible"])
+        self.assertEqual(room["participants"][0]["snapshot"]["hand"], ["1m"])
 
     def test_requires_token_to_read_room(self):
         owner = self.make_room()
