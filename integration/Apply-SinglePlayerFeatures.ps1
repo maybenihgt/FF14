@@ -1226,3 +1226,254 @@ Write-Host 'Applied SP1.10: manual tile selection cancels queued autoplay; sched
 
 
 
+# SP1.11: capture the player's persistent Doman Mahjong rank/rating from GSInfoEmj
+# and surface it in the tool, separately from the four in-match table scores.
+$configPath = 'upstream/Mahjong.Plugin.Dalamud/Configuration.cs'
+$config = [regex]::Replace((Get-Content $configPath -Raw), '\r\n?', [string][char]10)
+$rankConfigAnchor = '    public int CompletedMatchCount { get; init; } = 0;'
+$rankConfigFields = @'
+    public int CompletedMatchCount { get; init; } = 0;
+
+    /// <summary>Last captured Doman Mahjong career statistics from the Gold Saucer Mahjong page.</summary>
+    public int? MahjongMatchesPlayed { get; init; }
+    public int? MahjongCurrentRating { get; init; }
+    public int? MahjongHighestRating { get; init; }
+    public string MahjongRank { get; init; } = "";
+    public int? MahjongRankPoints { get; init; }
+    public int? MahjongNextRankPoints { get; init; }
+    public long? MahjongRankUpdatedAtUtcTicks { get; init; }
+'@
+$rankConfigFields = [regex]::Replace($rankConfigFields, '\r\n?', [string][char]10)
+if (-not $config.Contains('public int? MahjongCurrentRating')) {
+    if (-not $config.Contains($rankConfigAnchor)) { throw 'SP1.11 rank configuration insertion point not found.' }
+    $config = $config.Replace($rankConfigAnchor, $rankConfigFields.TrimEnd())
+    Set-Content -Path $configPath -Value $config -NoNewline
+}
+
+$rankReaderPath = 'upstream/Mahjong.Plugin.Dalamud/GameState/MahjongRankReader.cs'
+$rankReader = @'
+using System;
+using System.Globalization;
+using Dalamud.Plugin.Services;
+using FFXIVClientStructs.FFXIV.Component.GUI;
+using Mahjong.Plugin.Game;
+
+namespace Mahjong.Plugin.Dalamud.GameState;
+
+/// <summary>
+/// Reads the career rank/rating panel while the in-game Gold Saucer Mahjong
+/// page (GSInfoEmj) is visible, then persists the last verified values.
+/// This is deliberately separate from StateSnapshot.Scores (the current match).
+/// </summary>
+public sealed unsafe class MahjongRankReader
+{
+    // FFXIVClientStructs AddonGSInfoEmj field offsets from the addon base.
+    private const int MatchesPlayedOffset = 0x238;
+    private const int CurrentRatingOffset = 0x240;
+    private const int HighestRatingOffset = 0x248;
+    private const int RankOffset = 0x250;
+    private const int NextRankPointsOffset = 0x258;
+    private const int RankPointsOffset = 0x260;
+
+    private readonly IGameGui gameGui;
+    private readonly IConfigService<Configuration> configService;
+    private readonly IPluginLog log;
+    private bool loggedMissingNodes;
+
+    public MahjongRankReader(IGameGui gameGui, IConfigService<Configuration> configService, IPluginLog log)
+    {
+        this.gameGui = gameGui ?? throw new ArgumentNullException(nameof(gameGui));
+        this.configService = configService ?? throw new ArgumentNullException(nameof(configService));
+        this.log = log ?? throw new ArgumentNullException(nameof(log));
+    }
+
+    /// <summary>Polls only the visible career-statistics addon. Cached config values remain available after it closes.</summary>
+    public void Refresh()
+    {
+        var addonPtr = gameGui.GetAddonByName("GSInfoEmj");
+        if (addonPtr.Address == nint.Zero)
+            return;
+
+        var addon = (AtkUnitBase*)addonPtr.Address;
+        if (addon == null || !addon->IsVisible)
+            return;
+
+        byte* baseAddress = (byte*)addon;
+        string matchesText = ReadNode(*(AtkTextNode**)(baseAddress + MatchesPlayedOffset));
+        string currentText = ReadNode(*(AtkTextNode**)(baseAddress + CurrentRatingOffset));
+        string highestText = ReadNode(*(AtkTextNode**)(baseAddress + HighestRatingOffset));
+        string rankText = ReadNode(*(AtkTextNode**)(baseAddress + RankOffset));
+        string nextRankText = ReadNode(*(AtkTextNode**)(baseAddress + NextRankPointsOffset));
+        string rankPointsText = ReadNode(*(AtkTextNode**)(baseAddress + RankPointsOffset));
+
+        int? matches = ParseNumber(matchesText);
+        int? current = ParseNumber(currentText);
+        int? highest = ParseNumber(highestText);
+        int? nextRank = ParseNumber(nextRankText);
+        int? rankPoints = ParseNumber(rankPointsText);
+        string rank = rankText.Trim();
+
+        // Current and highest rating are required before accepting a sample.
+        // The remaining fields may be blank on unusual rank states, so preserve
+        // them as nullable values rather than manufacturing a value.
+        if (!current.HasValue || !highest.HasValue || rank.Length == 0)
+        {
+            if (!loggedMissingNodes)
+            {
+                loggedMissingNodes = true;
+                log.Warning($"[MahjongRank] GSInfoEmj is visible but career fields are not ready/valid. matches='{matchesText}', current='{currentText}', highest='{highestText}', rank='{rankText}'.");
+            }
+            return;
+        }
+        loggedMissingNodes = false;
+
+        var old = configService.Current;
+        if (old.MahjongMatchesPlayed == matches
+            && old.MahjongCurrentRating == current
+            && old.MahjongHighestRating == highest
+            && old.MahjongRank == rank
+            && old.MahjongRankPoints == rankPoints
+            && old.MahjongNextRankPoints == nextRank
+            && old.MahjongRankUpdatedAtUtcTicks.HasValue)
+            return;
+
+        long updatedAt = DateTime.UtcNow.Ticks;
+        configService.Update(c => c with
+        {
+            MahjongMatchesPlayed = matches,
+            MahjongCurrentRating = current,
+            MahjongHighestRating = highest,
+            MahjongRank = rank,
+            MahjongRankPoints = rankPoints,
+            MahjongNextRankPoints = nextRank,
+            MahjongRankUpdatedAtUtcTicks = updatedAt,
+        });
+
+        log.Information($"[MahjongRank] Saved career stats: rating={current}, highest={highest}, rank={rank}, rankPoints={rankPoints?.ToString() ?? "?"}, nextRank={nextRank?.ToString() ?? "?"}, matches={matches?.ToString() ?? "?"}.");
+    }
+
+    private static string ReadNode(AtkTextNode* node)
+    {
+        if (node == null)
+            return "";
+        return node->NodeText.ToString().Trim();
+    }
+
+    private static int? ParseNumber(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return null;
+        Span<char> digits = stackalloc char[value.Length];
+        int count = 0;
+        foreach (char c in value)
+        {
+            if (c >= '0' && c <= '9')
+                digits[count++] = c;
+        }
+        return count > 0 && int.TryParse(digits[..count], NumberStyles.None,
+            CultureInfo.InvariantCulture, out int parsed) ? parsed : null;
+    }
+}
+'@
+Set-Content -Path $rankReaderPath -Value $rankReader
+
+$pluginPath = 'upstream/Mahjong.Plugin.Dalamud/Plugin.cs'
+$plugin = [regex]::Replace((Get-Content $pluginPath -Raw), '\r\n?', [string][char]10)
+$oldProperty = '    public AddonEmjReader AddonReader { get; }'
+$newProperty = $oldProperty + [Environment]::NewLine + '    public MahjongRankReader MahjongRankReader { get; }'
+if ($plugin.Contains($oldProperty) -and -not $plugin.Contains('public MahjongRankReader MahjongRankReader')) {
+    $plugin = $plugin.Replace($oldProperty, $newProperty)
+}
+elseif (-not $plugin.Contains('public MahjongRankReader MahjongRankReader')) {
+    throw 'SP1.11 Plugin rank-reader property anchor not found.'
+}
+$pluginAnchor = '        MainWindow = new MainWindow(this);'
+$pluginInsert = '        MahjongRankReader = new MahjongRankReader(GameGui, ConfigService, Log);' + [Environment]::NewLine + $pluginAnchor
+if ($plugin.Contains($pluginAnchor) -and -not $plugin.Contains('MahjongRankReader = new MahjongRankReader(')) {
+    $plugin = $plugin.Replace($pluginAnchor, $pluginInsert)
+}
+elseif (-not $plugin.Contains('MahjongRankReader = new MahjongRankReader(')) {
+    throw 'SP1.11 Plugin rank-reader construction anchor not found.'
+}
+Set-Content -Path $pluginPath -Value $plugin -NoNewline
+
+$windowPath = 'upstream/Mahjong.Plugin.Dalamud/UI/MainWindow.cs'
+$window = [regex]::Replace((Get-Content $windowPath -Raw), '\r\n?', [string][char]10)
+$oldDraw = @'
+        DrawCollectionCard();
+        ImGui.Dummy(new Vector2(0, 4));
+        DrawLiveCard();
+'@
+$newDraw = @'
+        DrawCollectionCard();
+        ImGui.Dummy(new Vector2(0, 4));
+        DrawRankCard();
+        ImGui.Dummy(new Vector2(0, 4));
+        DrawLiveCard();
+'@
+$oldDraw = [regex]::Replace($oldDraw, '\r\n?', [string][char]10)
+$newDraw = [regex]::Replace($newDraw, '\r\n?', [string][char]10)
+if ($window.Contains($oldDraw) -and -not $window.Contains('private void DrawRankCard()')) {
+    $window = $window.Replace($oldDraw, $newDraw)
+}
+elseif (-not $window.Contains('private void DrawRankCard()')) {
+    throw 'SP1.11 MainWindow rank-card insertion anchor not found.'
+}
+
+$methodAnchor = '    private void DrawLiveCard()'
+$rankMethod = @'
+    private void DrawRankCard()
+    {
+        plugin.MahjongRankReader.Refresh();
+        var cfg = plugin.Configuration;
+        using (Theme.BeginCard("mahjong-rank"))
+        {
+            Theme.SectionHeader(Loc.T("Personal rank & rating", "个人段位积分"));
+            if (!cfg.MahjongCurrentRating.HasValue)
+            {
+                Theme.Subtle(Loc.T(
+                    "Open Character → Gold Saucer → Mahjong once to import your rank and rating.",
+                    "打开一次「角色 → 金碟游乐场 → 麻将」战绩页面，助手就会读取并保存段位与积分。"));
+                return;
+            }
+
+            string current = cfg.MahjongCurrentRating?.ToString() ?? "—";
+            string highest = cfg.MahjongHighestRating?.ToString() ?? "—";
+            string rank = string.IsNullOrWhiteSpace(cfg.MahjongRank) ? "—" : cfg.MahjongRank;
+            string rankPoints = cfg.MahjongRankPoints?.ToString() ?? "—";
+            string next = cfg.MahjongNextRankPoints?.ToString() ?? "—";
+            string matches = cfg.MahjongMatchesPlayed?.ToString() ?? "—";
+
+            ImGui.TextUnformatted($"{Loc.T("Current rating", "当前积分")}  {current}     {Loc.T("Highest", "历史最高")}  {highest}");
+            ImGui.TextUnformatted($"{Loc.T("Rank", "段位")}  {rank}     {rankPoints}{Loc.T(" pts", "点")}");
+            ImGui.TextUnformatted($"{Loc.T("To next rank", "距离下一段位")}  {next}{Loc.T(" pts", "点")}     {Loc.T("Matches", "总场数")}  {matches}");
+            if (cfg.MahjongRankUpdatedAtUtcTicks is { } ticks && ticks > 0)
+            {
+                string updated = new DateTime(ticks, DateTimeKind.Utc).ToLocalTime().ToString("HH:mm");
+                Theme.Subtle(Loc.T($"Last read {updated}; automatically refreshed when the game statistics page is open.",
+                    $"最近读取 {updated}；打开游戏战绩页面时会自动刷新。"));
+            }
+        }
+    }
+
+'@
+$rankMethod = [regex]::Replace($rankMethod, '\r\n?', [string][char]10)
+if ($window.Contains($methodAnchor) -and -not $window.Contains('private void DrawRankCard()')) {
+    $window = $window.Replace($methodAnchor, $rankMethod + $methodAnchor)
+}
+elseif (-not $window.Contains('private void DrawRankCard()')) {
+    throw 'SP1.11 MainWindow method insertion anchor not found.'
+}
+Set-Content -Path $windowPath -Value $window -NoNewline
+
+$window = $window.Replace('BuildUiVersion = "SP1.10"', 'BuildUiVersion = "SP1.11"')
+if (-not $window.Contains('BuildUiVersion = "SP1.11"')) {
+    throw 'Could not set SP1.11 build label.'
+}
+Set-Content -Path $windowPath -Value $window -NoNewline
+
+Write-Host 'Applied SP1.11: Mahjong rank/rating reader and tool-side career statistics card.'
+
+
+
+
