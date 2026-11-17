@@ -607,7 +607,6 @@ $discardBlock = $auto.Substring($discardStart, $discardEnd - $discardStart)
 $discardPattern = '(?s)            if \(!TryChoose\(snap, out var choice\)\)\s*\{\s*                LastActionDescription = "waiting for Mortal discard";\s*                fsm\.ClearContext\(\);\s*                return;\s*            \}'
 $discardReplacement = @'
             bool feederMode = plugin.Configuration.AutoPlayMode == AutoPlayMode.Tsumogiri;
-            bool isTerminalWin = snap.Legal.Can(ActionFlags.Ron) || snap.Legal.Can(ActionFlags.Tsumo);
             ActionChoice choice;
             int drawnSlot = -1;
             bool drawnIsRed = false;
