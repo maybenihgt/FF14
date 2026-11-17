@@ -68,7 +68,7 @@ $helper = @'
     }
 
 '@
-if (-not $callPolicy.Contains('CountImprovingUkeire(')) {
+if (-not $callPolicy.Contains('private static int CountImprovingUkeire(')) {
     if (-not $callPolicy.Contains($helperMarker)) { throw 'EnhancedCallPolicy helper insertion point not found.' }
     $callPolicy = $callPolicy.Replace($helperMarker, $helper + $helperMarker)
 }
