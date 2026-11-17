@@ -503,6 +503,10 @@ jobs:
           if ($source -notmatch 'EnhancedStrategy \{ get; init; \} = true;' -or $source -notmatch 'EnhancedShadowOnly \{ get; init; \} = false;') { throw 'Could not enable active enhanced strategy defaults.' }
           Set-Content -Path $path -Value $source -NoNewline
           Write-Host 'EnhancedStrategy=true; EnhancedShadowOnly=false; SearchBudgetMs remains 50.'
+      - name: Speed up small-account tsumogiri and avoid stale-revision stalls
+        shell: pwsh
+        run: ./integration-repo/integration/lan-peer/Apply-SmallAccountPacing.ps1
+
       - name: Build plugin
         working-directory: upstream
         run: dotnet build Mahjong.Plugin.Dalamud/Mahjong.Plugin.Dalamud.csproj --configuration Release --no-restore
