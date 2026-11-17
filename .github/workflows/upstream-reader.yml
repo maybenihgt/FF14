@@ -34,9 +34,13 @@ jobs:
         run: |
           Copy-Item integration-repo/integration/cn-candidate-layout.json upstream/data/layouts/cn-candidate.json
 
-      - name: Add UU LAN peer discovery (presence only)
+      - name: Apply UU LAN four-account discovery and private hand sync
         shell: pwsh
         run: ./integration-repo/integration/lan-peer/Apply-LanPeerDiscovery.ps1
+
+      - name: Apply big-account quick-win and small-account tsumogiri strategy
+        shell: pwsh
+        run: ./integration-repo/integration/lan-peer/Apply-TeamPlayStrategy.ps1
 
       - name: Set up .NET
         uses: actions/setup-dotnet@v4
