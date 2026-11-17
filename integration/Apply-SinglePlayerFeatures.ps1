@@ -183,8 +183,8 @@ $method = @'
             plugin.ConfigService.Update(c => c with { AutoPlayMode = AutoPlayMode.Tsumogiri });
 
         Theme.Subtle(Loc.T(
-            "Tsumogiri changes only your own discard after drawing; calls and win prompts still use the normal AI policy.",
-            "自动摸切只改变自己摸牌后的弃牌；鸣牌和和牌提示仍按原有 AI 策略处理。"));
+            "Feeder mode: discard the drawn tile and pass every Chi/Pon/Kan/Ron/Tsumo prompt.",
+            "送分模式：自己摸牌后直接摸切；遇到吃、碰、杠、荣和、自摸一律跳过。"));
 
         ImGui.Dummy(new Vector2(0, 6));
         bool limitEnabled = cfg.MatchLimitEnabled;
@@ -271,11 +271,23 @@ $oldChoose = @'
             }
 '@
 $newChoose = @'
-            bool forceTsumogiri = !isTerminalWin && plugin.Configuration.AutoPlayMode == AutoPlayMode.Tsumogiri;
+            bool feederMode = plugin.Configuration.AutoPlayMode == AutoPlayMode.Tsumogiri;
+            bool forceTsumogiri = !isTerminalWin && feederMode;
             bool drawnIsRed = false;
             int drawnSlot = -1;
             ActionChoice choice;
-            if (forceTsumogiri)
+            if (isTerminalWin && feederMode)
+            {
+                // Feeder mode declines a Ron/Tsumo prompt instead of taking the win.
+                if (!snap.Legal.Can(ActionFlags.Pass))
+                {
+                    LastActionDescription = "feeder mode: win prompt has no legal pass action; waiting";
+                    fsm.ClearContext();
+                    return;
+                }
+                choice = ActionChoice.Pass("feeder tsumogiri mode: decline Ron/Tsumo");
+            }
+            else if (forceTsumogiri)
             {
                 if (!TryChooseTsumogiri(snap, out choice, out drawnSlot, out drawnIsRed, out string tsumogiriError))
                 {
@@ -596,15 +608,13 @@ $newCallChoice = @'
             if (plugin.Configuration.AutoPlayMode == AutoPlayMode.Tsumogiri)
             {
                 hasMortalWait = false;
-                if (snap.Legal.Can(ActionFlags.Tsumo))
-                    choice = ActionChoice.DeclareTsumo("tsumogiri mode: accept legal self-draw win");
-                else if (snap.Legal.Can(ActionFlags.Ron))
-                    choice = ActionChoice.DeclareRon("tsumogiri mode: accept legal discard win");
-                else if (snap.Legal.Can(ActionFlags.Pass))
-                    choice = ActionChoice.Pass("tsumogiri mode: decline calls and wait for own draw");
+                // Feeder account: never take Chi/Pon/Kan, Ron or Tsumo.
+                // Pass every reaction prompt and wait for the next own draw.
+                if (snap.Legal.Can(ActionFlags.Pass))
+                    choice = ActionChoice.Pass("feeder tsumogiri mode: pass every call and win prompt");
                 else
                 {
-                    LastActionDescription = "tsumogiri mode: no legal pass/win action; waiting without calling";
+                    LastActionDescription = "feeder mode: no legal pass action; waiting without claiming";
                     fsm.ClearContext();
                     return;
                 }
@@ -662,7 +672,7 @@ $window = Get-Content $windowPath -Raw
 if (-not $window.Contains('private const string BuildUiVersion')) {
     $window = $window.Replace(
         '    private readonly Plugin plugin;',
-        '    private const string BuildUiVersion = "SP1.4";' + [Environment]::NewLine + '    private readonly Plugin plugin;')
+        '    private const string BuildUiVersion = "SP1.5";' + [Environment]::NewLine + '    private readonly Plugin plugin;')
 }
 $window = $window.Replace(
     ': base("Doman Mahjong Solver###domanmahjong-main")',
