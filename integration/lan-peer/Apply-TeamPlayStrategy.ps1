@@ -21,17 +21,18 @@ $helper = @'
         if (candidates is not { Length: > 0 })
             return false;
 
-        var best = candidates
+        var bestCandidates = candidates
             .Where(x => snapshot.Hand.Contains(x.Discard) && snapshot.Legal.AllowsDiscard(x.Discard))
             .OrderBy(x => x.ShantenAfter)
             .ThenByDescending(x => x.UkeireWeighted)
             .ThenByDescending(x => x.UkeireKinds)
             .ThenByDescending(x => x.YakuPotential)
             .ThenByDescending(x => x.Score)
-            .FirstOrDefault();
-
-        if (!snapshot.Hand.Contains(best.Discard) || !snapshot.Legal.AllowsDiscard(best.Discard))
+            .Take(1)
+            .ToArray();
+        if (bestCandidates.Length == 0)
             return false;
+        var best = bestCandidates[0];
 
         choice = ActionChoice.Discard(
             best.Discard,
@@ -95,7 +96,7 @@ $discardAnchor = @'
             }
 '@
 $discardReplacement = @'
-            if (IsMultiplayerSmallAccount())
+            if (IsMultiplayerSmallAccount() && !isTerminalWin)
             {
                 DispatchOutOfSyncTsumogiri(snap, ActionChoice.Pass("small account: forced tsumogiri; never pursue a win"));
                 return;
@@ -146,6 +147,14 @@ if (-not $source.Contains('small account: do not win, call or declare riichi')) 
 # Big accounts take any currently legal win immediately; a private table uses a quick-win discard ordering.
 $chooseMarker = '        if (snapshot.Legal.Can(ActionFlags.Ron) && plugin.MortalBridge.HasExpiredReactionWindow(snapshot))'
 $bigStrategy = @'
+        if (IsMultiplayerSmallAccount())
+        {
+            choice = ActionChoice.Pass("small account: pass every win and call prompt");
+            hasMortalWait = false;
+            plugin.Aggregator.PublishLocalExecution(snapshot, choice, "small-account-pass");
+            return true;
+        }
+
         if (IsMultiplayerBigAccount())
         {
             if (snapshot.Legal.Can(ActionFlags.Tsumo))
