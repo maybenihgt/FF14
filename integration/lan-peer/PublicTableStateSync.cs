@@ -187,18 +187,23 @@ public sealed class PublicTableStateSync : IDisposable
                     if (!IsLocalSubnetPeer(datagram.RemoteEndPoint.Address))
                         continue;
 
-                    var packet = datagram.Buffer.AsSpan();
-                    if (System.Text.Encoding.ASCII.GetString(packet[..4]) != PacketMagic)
+                    byte[] packet = datagram.Buffer;
+                    if (System.Text.Encoding.ASCII.GetString(packet, 0, 4) != PacketMagic)
                         continue;
-                    Guid frameId = new(packet.Slice(4, 16));
-                    int fragmentCount = BinaryPrimitives.ReadUInt16LittleEndian(packet.Slice(20, 2));
-                    int fragmentIndex = BinaryPrimitives.ReadUInt16LittleEndian(packet.Slice(22, 2));
+                    Guid frameId = new(packet.AsSpan(4, 16));
+                    int fragmentCount = BinaryPrimitives.ReadUInt16LittleEndian(packet.AsSpan(20, 2));
+                    int fragmentIndex = BinaryPrimitives.ReadUInt16LittleEndian(packet.AsSpan(22, 2));
                     if (fragmentCount is < 1 or > MaxFragments || fragmentIndex >= fragmentCount)
                         continue;
 
                     string key = $"{datagram.RemoteEndPoint.Address}:{frameId:N}";
                     if (!assemblies.TryGetValue(key, out var assembly))
                     {
+                        if (assemblies.Count >= 64)
+                        {
+                            string oldest = assemblies.OrderBy(x => x.Value.CreatedUtc).First().Key;
+                            assemblies.Remove(oldest);
+                        }
                         assembly = new FragmentAssembly(fragmentCount, DateTimeOffset.UtcNow);
                         assemblies[key] = assembly;
                     }
@@ -208,7 +213,7 @@ public sealed class PublicTableStateSync : IDisposable
                         continue;
                     }
 
-                    assembly.Add(fragmentIndex, packet[HeaderSize..].ToArray());
+                    assembly.Add(fragmentIndex, packet.AsSpan(HeaderSize).ToArray());
                     if (assembly.ReceivedCount == fragmentCount)
                     {
                         assemblies.Remove(key);
