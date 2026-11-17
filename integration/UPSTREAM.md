@@ -68,3 +68,13 @@ The CN candidate build removes the SettingsWindow cards for Debug packet logger,
 The current Multiplayer tab displays up to four plugin instances visible on the same IPv4 subnet. Each client defaults to the **small account** role; only an explicit selection marks it as a **big account**. The previous MAIN_A / MAIN_B / ALT_C / ALT_D labels are removed.
 
 This roster is presence discovery only. It does not create an FFXIV Mahjong match or synchronize live hands, discards, scores, game state, or actions. The older `backend/team_room.py` remains a separate 2v2 sandbox prototype for manual JSON snapshots and post-match rating statistics; it is not live four-player gameplay.
+
+## Opt-in public table-state synchronization
+
+`PublicTableStateSync` is wired to the verified `StateSnapshot` stream and sends only a dedicated whitelist DTO over UDP 47722. It includes public scores, visible rivers and markers, open melds, riichi markers, dora indicators, round context and wall count. It explicitly has no fields for `Hand`, `HandIsRed`, `Legal`, private draw information, recommendations, Mortal decisions or ura-dora.
+
+Frames are Brotli-compressed and split into bounded UDP fragments. The receiver validates the protocol, timestamp, sender role, seat count, tile IDs, array lengths and size limits before exposing a read-only summary in the Multiplayer UI. This is a public-board mirror only; private hands and per-client decisions remain local.
+
+Public-state sync is disabled by default and requires explicit opt-in on each client. It also requires a locally verified public state; when the CN protocol state is unavailable or inconsistent, the client does not broadcast a placeholder snapshot.
+
+UDP 47721 remains presence discovery; UDP 47722 carries optional public state. Both are subnet-scoped broadcasts without cryptographic identity authentication and should only be enabled on a trusted UU virtual LAN.
