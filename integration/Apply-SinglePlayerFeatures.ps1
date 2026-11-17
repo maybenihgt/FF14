@@ -1228,43 +1228,21 @@ Write-Host 'Applied SP1.10: manual tile selection cancels queued autoplay; sched
 
 # SP1.11: capture the player's persistent Doman Mahjong rank/rating from GSInfoEmj
 # and surface it in the tool, separately from the four in-match table scores.
-$configPath = 'upstream/Mahjong.Plugin.Dalamud/Configuration.cs'
-$config = [regex]::Replace((Get-Content $configPath -Raw), '\r\n?', [string][char]10)
-$rankConfigAnchor = '    public int CompletedMatchCount { get; init; } = 0;'
-$rankConfigFields = @'
-    public int CompletedMatchCount { get; init; } = 0;
-
-    /// <summary>Last captured Doman Mahjong career statistics from the Gold Saucer Mahjong page.</summary>
-    public int? MahjongMatchesPlayed { get; init; }
-    public int? MahjongCurrentRating { get; init; }
-    public int? MahjongHighestRating { get; init; }
-    public string MahjongRank { get; init; } = "";
-    public int? MahjongRankPoints { get; init; }
-    public int? MahjongNextRankPoints { get; init; }
-    public long? MahjongRankUpdatedAtUtcTicks { get; init; }
-'@
-$rankConfigFields = [regex]::Replace($rankConfigFields, '\r\n?', [string][char]10)
-if (-not $config.Contains('public int? MahjongCurrentRating')) {
-    if (-not $config.Contains($rankConfigAnchor)) { throw 'SP1.11 rank configuration insertion point not found.' }
-    $config = $config.Replace($rankConfigAnchor, $rankConfigFields.TrimEnd())
-    Set-Content -Path $configPath -Value $config -NoNewline
-}
-
 $rankReaderPath = 'upstream/Mahjong.Plugin.Dalamud/GameState/MahjongRankReader.cs'
 $rankReader = @'
 using System;
 using System.Globalization;
+using System.IO;
+using System.Text.Json;
 using Dalamud.Plugin.Services;
 using FFXIVClientStructs.FFXIV.Component.GUI;
-using Mahjong.Plugin.Dalamud;
-using Mahjong.Plugin.Game;
 
 namespace Mahjong.Plugin.Dalamud.GameState;
 
 /// <summary>
-/// Reads the career rank/rating panel while the in-game Gold Saucer Mahjong
-/// page (GSInfoEmj) is visible, then persists the last verified values.
-/// This is deliberately separate from StateSnapshot.Scores (the current match).
+/// Reads the career rank/rating panel while GSInfoEmj is visible, then stores
+/// the last verified sample in a separate local file. It never edits gameplay
+/// configuration, so a rank refresh cannot cancel a queued autoplay action.
 /// </summary>
 public sealed unsafe class MahjongRankReader
 {
@@ -1277,18 +1255,29 @@ public sealed unsafe class MahjongRankReader
     private const int RankPointsOffset = 0x260;
 
     private readonly IGameGui gameGui;
-    private readonly IConfigService<Configuration> configService;
     private readonly IPluginLog log;
+    private readonly string statsPath;
     private bool loggedMissingNodes;
 
-    public MahjongRankReader(IGameGui gameGui, IConfigService<Configuration> configService, IPluginLog log)
+    public MahjongRankStats? Latest { get; private set; }
+
+    public MahjongRankReader(IGameGui gameGui, string configDirectory, IPluginLog log)
     {
         this.gameGui = gameGui ?? throw new ArgumentNullException(nameof(gameGui));
-        this.configService = configService ?? throw new ArgumentNullException(nameof(configService));
         this.log = log ?? throw new ArgumentNullException(nameof(log));
+        statsPath = Path.Combine(configDirectory, "mahjong-rank-stats.json");
+        try
+        {
+            if (File.Exists(statsPath))
+                Latest = JsonSerializer.Deserialize<MahjongRankStats>(File.ReadAllText(statsPath));
+        }
+        catch (Exception ex)
+        {
+            log.Warning($"[MahjongRank] Could not load saved rank statistics: {ex.Message}");
+        }
     }
 
-    /// <summary>Polls only the visible career-statistics addon. Cached config values remain available after it closes.</summary>
+    /// <summary>Polls only the visible career-statistics addon. The last saved values remain available after it closes.</summary>
     public void Refresh()
     {
         var addonPtr = gameGui.GetAddonByName("GSInfoEmj");
@@ -1314,9 +1303,6 @@ public sealed unsafe class MahjongRankReader
         int? rankPoints = ParseNumber(rankPointsText);
         string rank = rankText.Trim();
 
-        // Current and highest rating are required before accepting a sample.
-        // The remaining fields may be blank on unusual rank states, so preserve
-        // them as nullable values rather than manufacturing a value.
         if (!current.HasValue || !highest.HasValue || rank.Length == 0)
         {
             if (!loggedMissingNodes)
@@ -1328,34 +1314,38 @@ public sealed unsafe class MahjongRankReader
         }
         loggedMissingNodes = false;
 
-        var old = configService.Current;
-        if (old.MahjongMatchesPlayed == matches
-            && old.MahjongCurrentRating == current
-            && old.MahjongHighestRating == highest
-            && old.MahjongRank == rank
-            && old.MahjongRankPoints == rankPoints
-            && old.MahjongNextRankPoints == nextRank
-            && old.MahjongRankUpdatedAtUtcTicks.HasValue)
+        if (Latest is { } old
+            && old.MatchesPlayed == matches
+            && old.CurrentRating == current
+            && old.HighestRating == highest
+            && old.Rank == rank
+            && old.RankPoints == rankPoints
+            && old.NextRankPoints == nextRank)
             return;
 
-        long updatedAt = DateTime.UtcNow.Ticks;
-        configService.Update(c => c with
+        var sample = new MahjongRankStats(
+            matches, current, highest, rank, rankPoints, nextRank, DateTime.UtcNow.Ticks);
+        Latest = sample;
+        try
         {
-            MahjongMatchesPlayed = matches,
-            MahjongCurrentRating = current,
-            MahjongHighestRating = highest,
-            MahjongRank = rank,
-            MahjongRankPoints = rankPoints,
-            MahjongNextRankPoints = nextRank,
-            MahjongRankUpdatedAtUtcTicks = updatedAt,
-        });
-
-        log.Information($"[MahjongRank] Saved career stats: rating={current}, highest={highest}, rank={rank}, rankPoints={rankPoints?.ToString() ?? "?"}, nextRank={nextRank?.ToString() ?? "?"}, matches={matches?.ToString() ?? "?"}.");
+            Directory.CreateDirectory(Path.GetDirectoryName(statsPath)!);
+            string tempPath = statsPath + ".tmp";
+            File.WriteAllText(tempPath, JsonSerializer.Serialize(sample));
+            File.Move(tempPath, statsPath, overwrite: true);
+            log.Information($"[MahjongRank] Saved career stats: rating={current}, highest={highest}, rank={rank}, rankPoints={rankPoints?.ToString() ?? "?"}, nextRank={nextRank?.ToString() ?? "?"}, matches={matches?.ToString() ?? "?"}.");
+        }
+        catch (Exception ex)
+        {
+            log.Warning($"[MahjongRank] Could not persist rank statistics: {ex.Message}");
+        }
     }
 
     private static string ReadNode(AtkTextNode* node)
     {
         if (node == null)
+            return "";
+        ulong address = (ulong)(nuint)node;
+        if (address < 0x10000UL || address > 0x00007FFFFFFFFFFFUL)
             return "";
         return node->NodeText.ToString().Trim();
     }
@@ -1375,6 +1365,15 @@ public sealed unsafe class MahjongRankReader
             CultureInfo.InvariantCulture, out int parsed) ? parsed : null;
     }
 }
+
+public sealed record MahjongRankStats(
+    int? MatchesPlayed,
+    int? CurrentRating,
+    int? HighestRating,
+    string Rank,
+    int? RankPoints,
+    int? NextRankPoints,
+    long UpdatedAtUtcTicks);
 '@
 Set-Content -Path $rankReaderPath -Value $rankReader
 
@@ -1389,7 +1388,7 @@ elseif (-not $plugin.Contains('public MahjongRankReader MahjongRankReader')) {
     throw 'SP1.11 Plugin rank-reader property anchor not found.'
 }
 $pluginAnchor = '        MainWindow = new MainWindow(this);'
-$pluginInsert = '        MahjongRankReader = new MahjongRankReader(GameGui, ConfigService, Log);' + [Environment]::NewLine + $pluginAnchor
+$pluginInsert = '        MahjongRankReader = new MahjongRankReader(GameGui, configDir, Log);' + [Environment]::NewLine + $pluginAnchor
 if ($plugin.Contains($pluginAnchor) -and -not $plugin.Contains('MahjongRankReader = new MahjongRankReader(')) {
     $plugin = $plugin.Replace($pluginAnchor, $pluginInsert)
 }
@@ -1418,11 +1417,11 @@ $rankMethod = @'
     private void DrawRankCard()
     {
         plugin.MahjongRankReader.Refresh();
-        var cfg = plugin.Configuration;
+        var stats = plugin.MahjongRankReader.Latest;
         using (Theme.BeginCard("mahjong-rank"))
         {
             Theme.SectionHeader(Loc.T("Personal rank & rating", "个人段位积分"));
-            if (!cfg.MahjongCurrentRating.HasValue)
+            if (stats?.CurrentRating is not { } currentRating)
             {
                 Theme.Subtle(Loc.T(
                     "Open Character → Gold Saucer → Mahjong once to import your rank and rating.",
@@ -1430,19 +1429,19 @@ $rankMethod = @'
                 return;
             }
 
-            string current = cfg.MahjongCurrentRating?.ToString() ?? "—";
-            string highest = cfg.MahjongHighestRating?.ToString() ?? "—";
-            string rank = string.IsNullOrWhiteSpace(cfg.MahjongRank) ? "—" : cfg.MahjongRank;
-            string rankPoints = cfg.MahjongRankPoints?.ToString() ?? "—";
-            string next = cfg.MahjongNextRankPoints?.ToString() ?? "—";
-            string matches = cfg.MahjongMatchesPlayed?.ToString() ?? "—";
+            string current = currentRating.ToString();
+            string highest = stats.HighestRating?.ToString() ?? "—";
+            string rank = string.IsNullOrWhiteSpace(stats.Rank) ? "—" : stats.Rank;
+            string rankPoints = stats.RankPoints?.ToString() ?? "—";
+            string next = stats.NextRankPoints?.ToString() ?? "—";
+            string matches = stats.MatchesPlayed?.ToString() ?? "—";
 
             ImGui.TextUnformatted($"{Loc.T("Current rating", "当前积分")}  {current}     {Loc.T("Highest", "历史最高")}  {highest}");
             ImGui.TextUnformatted($"{Loc.T("Rank", "段位")}  {rank}     {rankPoints}{Loc.T(" pts", "点")}");
             ImGui.TextUnformatted($"{Loc.T("To next rank", "距离下一段位")}  {next}{Loc.T(" pts", "点")}     {Loc.T("Matches", "总场数")}  {matches}");
-            if (cfg.MahjongRankUpdatedAtUtcTicks is { } ticks && ticks > 0)
+            if (stats.UpdatedAtUtcTicks > 0)
             {
-                string updated = new DateTime(ticks, DateTimeKind.Utc).ToLocalTime().ToString("HH:mm");
+                string updated = new DateTime(stats.UpdatedAtUtcTicks, DateTimeKind.Utc).ToLocalTime().ToString("HH:mm");
                 Theme.Subtle(Loc.T($"Last read {updated}; automatically refreshed when the game statistics page is open.",
                     $"最近读取 {updated}；打开游戏战绩页面时会自动刷新。"));
             }
