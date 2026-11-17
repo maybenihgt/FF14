@@ -1256,6 +1256,7 @@ using System;
 using System.Globalization;
 using Dalamud.Plugin.Services;
 using FFXIVClientStructs.FFXIV.Component.GUI;
+using Mahjong.Plugin.Dalamud;
 using Mahjong.Plugin.Game;
 
 namespace Mahjong.Plugin.Dalamud.GameState;
@@ -1399,25 +1400,15 @@ Set-Content -Path $pluginPath -Value $plugin -NoNewline
 
 $windowPath = 'upstream/Mahjong.Plugin.Dalamud/UI/MainWindow.cs'
 $window = [regex]::Replace((Get-Content $windowPath -Raw), '\r\n?', [string][char]10)
-$oldDraw = @'
-        DrawCollectionCard();
-        ImGui.Dummy(new Vector2(0, 4));
-        DrawLiveCard();
-'@
-$newDraw = @'
-        DrawCollectionCard();
-        ImGui.Dummy(new Vector2(0, 4));
-        DrawRankCard();
-        ImGui.Dummy(new Vector2(0, 4));
-        DrawLiveCard();
-'@
-$oldDraw = [regex]::Replace($oldDraw, '\r\n?', [string][char]10)
-$newDraw = [regex]::Replace($newDraw, '\r\n?', [string][char]10)
-if ($window.Contains($oldDraw) -and -not $window.Contains('private void DrawRankCard()')) {
-    $window = $window.Replace($oldDraw, $newDraw)
+$drawCall = '        DrawLiveCard();'
+$drawReplacement = '        DrawRankCard();' + [string][char]10
+    + '        ImGui.Dummy(new Vector2(0, 4));' + [string][char]10
+    + $drawCall
+if ($window.Contains($drawCall) -and -not $window.Contains('private void DrawRankCard()')) {
+    $window = $window.Replace($drawCall, $drawReplacement)
 }
 elseif (-not $window.Contains('private void DrawRankCard()')) {
-    throw 'SP1.11 MainWindow rank-card insertion anchor not found.'
+    throw 'SP1.11 MainWindow DrawLiveCard insertion anchor not found.'
 }
 
 $methodAnchor = '    private void DrawLiveCard()'
