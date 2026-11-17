@@ -132,6 +132,8 @@ $newUpdate = @'
 if ($collection.Contains($oldUpdate)) { $collection = $collection.Replace($oldUpdate, $newUpdate) }
 elseif (-not $collection.Contains('bool inTargetDutyNow = game != null')) { throw 'Collection Update method anchor not found.' }
 
+$collection = $collection.Replace('Plugin.ClientState.TerritoryType.RowId == TerritoryId', 'Plugin.ClientState.TerritoryType == TerritoryId')
+
 $oldAllowed = @'
             AutomationAllowed = cfg.TosAccepted && cfg.AutoPlayConfirmed && cfg.AutomationArmed && !cfg.SuggestionOnly
                 && cfg.AutoAdvanceAfterHand,
