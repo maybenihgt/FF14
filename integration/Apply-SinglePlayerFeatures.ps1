@@ -838,10 +838,12 @@ $autoPath = 'upstream/Mahjong.Plugin.Dalamud/Actions/AutoPlayLoop.cs'
 $auto = Get-Content $autoPath -Raw
 
 $oldResultLatch = @'
+        EmitProgressing();
         handResultDispatchedThisInstance = true;
         ScheduleHandResultAdvance(context);
 '@
 $newResultLatch = @'
+        EmitProgressing();
         // Latch only after the scheduled callback has actually dispatched successfully.
         // If the scheduler cancels the callback or the addon rejects the click, allow retry.
         ScheduleHandResultAdvance(context);
