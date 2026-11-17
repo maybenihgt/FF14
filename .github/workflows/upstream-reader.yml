@@ -34,6 +34,10 @@ jobs:
         run: |
           Copy-Item integration-repo/integration/cn-candidate-layout.json upstream/data/layouts/cn-candidate.json
 
+      - name: Add UU LAN peer discovery (presence only)
+        shell: pwsh
+        run: ./integration-repo/integration/lan-peer/Apply-LanPeerDiscovery.ps1
+
       - name: Set up .NET
         uses: actions/setup-dotnet@v4
         with:
