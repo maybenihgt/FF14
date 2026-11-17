@@ -889,8 +889,7 @@ elseif (-not $auto.Contains('hand-result-next scheduled click became stale befor
     # The latch is now set only after DispatchHandResultNext returns Ok. Therefore a
     # scheduled callback rejected by the existing generation/state guard leaves the
     # latch false and the next update can retry without changing this guard.
-    if ($auto.Contains('// SP1.8: latch is set only after a successful Next dispatch.')
-        -and $auto.Contains('handResultDispatchedThisInstance = result == InputDispatcher.DispatchResult.Ok;')) {
+    if ($auto.Contains('// SP1.8: latch is set only after a successful Next dispatch.') -and $auto.Contains('handResultDispatchedThisInstance = result == InputDispatcher.DispatchResult.Ok;')) {
         Write-Host 'SP1.8: retaining the pinned upstream scheduled-action guard; failed/stale callbacks leave the retry latch clear.'
     }
     else {
