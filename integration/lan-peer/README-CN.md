@@ -1,38 +1,39 @@
-# UU LAN Peer Discovery Test Build
+# UU 云联机节点发现测试版
 
-This overlay adds presence discovery for plugin instances connected to the same IPv4 virtual LAN.
+此功能用于显示加入同一个 UU 云联机虚拟局域网、并启用了插件节点发现的客户端。
 
-## What it exchanges
+## 使用方法
 
-Only these fields are broadcast:
-- random plugin-instance ID (rotates when plugin reloads)
-- local account label: MAIN_A, MAIN_B, ALT_C, ALT_D, or UNASSIGNED
-- plugin version
-- timestamp and HMAC authentication
+1. 在每台电脑上手动加入同一个 UU 云联机房间。
+2. 在插件主窗口切换到 **多人模式**。
+3. 为本机选择账号标签：MAIN_A / MAIN_B / ALT_C / ALT_D。
+4. 在每台电脑上启用 **节点发现**。
+5. 在 Windows Defender 防火墙的“专用网络”配置文件中允许 UDP 入站端口 **47721**。
+6. 等待几秒钟，插件应显示同一可见 IPv4 子网内的其他插件实例、账号标签和虚拟网卡 IP。
 
-It does **not** send or receive game hands, tiles, discards, scores, opponents, board state, game actions, or ranking instructions. Each plugin continues to analyze only its own local client.
+不再需要插件自己的共享房间码。UU 云联机房间是用户手动加入的网络范围；插件通过 IPv4 UDP 广播发现同一可见子网内的插件实例。
 
-## Test setup
+## 交换的数据与边界
 
-1. Install this same test build on at least two PCs connected to the same UU virtual LAN.
-2. Open the plugin and find the **UU LAN peers / UU 局域网节点** card.
-3. On one PC, choose **Generate and copy room code**.
-4. Paste the same room code into the card on every other PC. Use at least 12 characters.
-5. Assign a local label (MAIN_A / MAIN_B / ALT_C / ALT_D) on each PC.
-6. Enable **Enable peer discovery** on each PC.
-7. Allow inbound UDP port **47721** on the Windows **Private** firewall profile.
-8. Wait a few seconds. Each PC should list the other active plugin instances and their virtual-LAN IP addresses.
+广播内容仅包括：
+- 随机插件实例 ID（插件重载后会变化）
+- 本地账号标签：MAIN_A、MAIN_B、ALT_C、ALT_D 或 UNASSIGNED
+- 插件版本
+- 时间戳
 
-The plugin sends an authenticated IPv4 broadcast every two seconds. Entries expire after eight seconds without a heartbeat. The room code is never transmitted; packets are authenticated with HMAC-SHA256.
+该协议不包含 HMAC 共享密钥，也不提供密码学身份认证。它只用于同一局域网内的在线状态展示；同一可见子网内其他启用节点发现的插件实例也可能出现。因此不要把在线节点列表当作 UU 房间成员的权威名单。
 
-## Troubleshooting
+插件不会通过此 UDP 协议发送或接收手牌、牌河、分数、对手信息、游戏状态、游戏动作或排名指令。每个客户端仍然只分析本机可见的游戏状态。
 
-- Check that the PCs are in the same UU virtual LAN room.
-- Confirm that each PC has the exact same room code.
-- Confirm UDP 47721 inbound is permitted by Windows Defender Firewall.
-- Some VPN/virtual-LAN adapters do not forward broadcast traffic. If the two PCs can ping each other but do not discover peers, this first test build may need a unicast fallback.
-- The LAN feature is disabled by default and does not change the plugin's Off / Hints / Auto-play selection.
+## 故障排查
 
-## Scope
+- 确认所有电脑确实加入了同一个 UU 云联机房间。
+- 确认每台电脑都启用了插件的节点发现。
+- 确认 Windows 防火墙允许专用网络 UDP 47721 入站。
+- 如果两台电脑可以互相 ping，但列表仍为空，可能是 UU 虚拟网卡没有转发 IPv4 广播；届时需要增加单播发现回退方案。
+- 节点超过 8 秒没有心跳会从列表中消失。
+- 节点发现默认关闭，不会改变单人模式中的 Off / Hints / Auto-play 设置。
 
-This is an experimental connectivity test, not proof that UU exposes game memory or another player's private game data. Peer discovery only shows other plugin instances that opted into the same room code.
+## 当前限制
+
+此功能是实验性的 LAN 在线发现，不证明 UU 可以读取游戏内存或其他玩家的隐藏牌局数据。发现范围取决于本机网络接口、IPv4 子网和广播转发行为，并不直接读取 UU 房间 ID。
