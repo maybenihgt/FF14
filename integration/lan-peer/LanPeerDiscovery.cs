@@ -2,28 +2,26 @@ using System.Collections.Concurrent;
 using System.Net;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
-using System.Security.Cryptography;
-using System.Text;
 using System.Text.Json;
 
 namespace Mahjong.Plugin.Dalamud.Networking;
 
 /// <summary>
-/// Broadcasts a small, authenticated presence packet on IPv4 LAN interfaces.
-/// Deliberately carries identity/presence only: no hand, tile, score, opponent,
-/// game-state, or action data is part of this protocol.
+/// Broadcasts presence on active IPv4 subnets. This is intentionally an untrusted,
+/// presence-only protocol: no hand, tile, score, opponent, game-state or action data
+/// is ever exchanged. The local subnet is the discovery boundary; there is no app
+/// room secret because users already join the same virtual LAN manually.
 /// </summary>
 public sealed class LanPeerDiscovery : IDisposable
 {
     public const int DefaultPort = 47721;
-    private const string Protocol = "doman-mahjong-peer-v1";
+    private const string Protocol = "doman-mahjong-peer-v2";
     private const int MaxPacketBytes = 2048;
     private static readonly TimeSpan PeerExpiry = TimeSpan.FromSeconds(8);
     private static readonly TimeSpan BroadcastInterval = TimeSpan.FromSeconds(2);
 
     private readonly Func<bool> enabled;
     private readonly Func<string> accountLabel;
-    private readonly Func<string> roomCode;
     private readonly string instanceId = Guid.NewGuid().ToString("N");
     private readonly ConcurrentDictionary<string, LanPeerInfo> peers = new();
     private readonly CancellationTokenSource lifetime = new();
@@ -31,11 +29,10 @@ public sealed class LanPeerDiscovery : IDisposable
     private readonly Task broadcasterTask;
     private string lastError = string.Empty;
 
-    public LanPeerDiscovery(Func<bool> enabled, Func<string> accountLabel, Func<string> roomCode)
+    public LanPeerDiscovery(Func<bool> enabled, Func<string> accountLabel)
     {
         this.enabled = enabled;
         this.accountLabel = accountLabel;
-        this.roomCode = roomCode;
         receiverTask = Task.Run(() => ReceiveLoopAsync(lifetime.Token));
         broadcasterTask = Task.Run(() => BroadcastLoopAsync(lifetime.Token));
     }
@@ -55,15 +52,16 @@ public sealed class LanPeerDiscovery : IDisposable
             try
             {
                 PruneExpiredPeers();
-                string key = roomCode().Trim();
-                if (enabled() && key.Length >= 12)
+                if (enabled())
                 {
                     string label = NormalizeLabel(accountLabel());
                     long sentAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-                    string auth = Sign(key, instanceId, label, sentAt);
-                    var frame = new PresenceFrame(Protocol, instanceId, label,
+                    var frame = new PresenceFrame(
+                        Protocol,
+                        instanceId,
+                        label,
                         typeof(LanPeerDiscovery).Assembly.GetName().Version?.ToString() ?? "unknown",
-                        sentAt, auth);
+                        sentAt);
                     byte[] payload = JsonSerializer.SerializeToUtf8Bytes(frame);
                     bool sendFailed = false;
                     foreach (var endpoint in GetBroadcastEndpoints())
@@ -103,27 +101,26 @@ public sealed class LanPeerDiscovery : IDisposable
                     var datagram = await listener.ReceiveAsync(cancellationToken).ConfigureAwait(false);
                     if (!enabled() || datagram.Buffer.Length is 0 or > MaxPacketBytes)
                         continue;
-
-                    string key = roomCode().Trim();
-                    if (key.Length < 12)
+                    if (!IsLocalSubnetPeer(datagram.RemoteEndPoint.Address))
                         continue;
 
                     PresenceFrame? frame;
                     try { frame = JsonSerializer.Deserialize<PresenceFrame>(datagram.Buffer); }
                     catch (JsonException) { continue; }
+
                     if (frame is null || frame.Protocol != Protocol || frame.InstanceId == instanceId)
                         continue;
-                    if (!IsValidLabel(frame.AccountLabel))
+                    if (string.IsNullOrWhiteSpace(frame.InstanceId) ||
+                        frame.InstanceId.Length > 64 ||
+                        string.IsNullOrWhiteSpace(frame.PluginVersion) ||
+                        frame.PluginVersion.Length > 32 ||
+                        !IsValidLabel(frame.AccountLabel))
                         continue;
 
                     long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
                     long oldestAccepted = now - (long)TimeSpan.FromSeconds(30).TotalMilliseconds;
                     long newestAccepted = now + (long)TimeSpan.FromSeconds(30).TotalMilliseconds;
                     if (frame.SentAtUnixMs < oldestAccepted || frame.SentAtUnixMs > newestAccepted)
-                        continue;
-
-                    string expected = Sign(key, frame.InstanceId, frame.AccountLabel, frame.SentAtUnixMs);
-                    if (!FixedTimeEquals(expected, frame.Auth))
                         continue;
 
                     peers[frame.InstanceId] = new LanPeerInfo(
@@ -154,12 +151,58 @@ public sealed class LanPeerDiscovery : IDisposable
                 peers.TryRemove(pair.Key, out _);
     }
 
+    private static bool IsLocalSubnetPeer(IPAddress remote)
+    {
+        if (remote.AddressFamily != AddressFamily.InterNetwork || IPAddress.IsLoopback(remote))
+            return false;
+
+        byte[] remoteBytes = remote.GetAddressBytes();
+        foreach (var adapter in NetworkInterface.GetAllNetworkInterfaces())
+        {
+            if (adapter.OperationalStatus != OperationalStatus.Up ||
+                adapter.NetworkInterfaceType == NetworkInterfaceType.Loopback)
+                continue;
+
+            IPInterfaceProperties properties;
+            try { properties = adapter.GetIPProperties(); }
+            catch (NetworkInformationException) { continue; }
+
+            foreach (var unicast in properties.UnicastAddresses)
+            {
+                IPAddress localAddress = unicast.Address;
+                IPAddress? maskAddress = unicast.IPv4Mask;
+                if (localAddress.AddressFamily != AddressFamily.InterNetwork || maskAddress is null)
+                    continue;
+
+                byte[] localBytes = localAddress.GetAddressBytes();
+                byte[] maskBytes = maskAddress.GetAddressBytes();
+                if (localBytes.Length != 4 || maskBytes.Length != 4)
+                    continue;
+
+                bool sameSubnet = true;
+                for (int i = 0; i < 4; i++)
+                {
+                    if ((localBytes[i] & maskBytes[i]) != (remoteBytes[i] & maskBytes[i]))
+                    {
+                        sameSubnet = false;
+                        break;
+                    }
+                }
+                if (sameSubnet)
+                    return true;
+            }
+        }
+
+        return false;
+    }
+
     private static IEnumerable<IPEndPoint> GetBroadcastEndpoints()
     {
         var endpoints = new HashSet<string>(StringComparer.Ordinal);
         foreach (var adapter in NetworkInterface.GetAllNetworkInterfaces())
         {
-            if (adapter.OperationalStatus != OperationalStatus.Up || adapter.NetworkInterfaceType == NetworkInterfaceType.Loopback)
+            if (adapter.OperationalStatus != OperationalStatus.Up ||
+                adapter.NetworkInterfaceType == NetworkInterfaceType.Loopback)
                 continue;
 
             IPInterfaceProperties properties;
@@ -172,6 +215,7 @@ public sealed class LanPeerDiscovery : IDisposable
                 var mask = unicast.IPv4Mask;
                 if (address.AddressFamily != AddressFamily.InterNetwork || mask is null)
                     continue;
+
                 byte[] ip = address.GetAddressBytes();
                 byte[] subnet = mask.GetAddressBytes();
                 if (ip.Length != 4 || subnet.Length != 4)
@@ -195,26 +239,6 @@ public sealed class LanPeerDiscovery : IDisposable
     private static bool IsValidLabel(string? value) =>
         value is "MAIN_A" or "MAIN_B" or "ALT_C" or "ALT_D" or "UNASSIGNED";
 
-    private static string Sign(string key, string instance, string label, long sentAt)
-    {
-        string canonical = $"{Protocol}\n{instance}\n{label}\n{sentAt}";
-        using var hmac = new HMACSHA256(Encoding.UTF8.GetBytes(key));
-        return Convert.ToHexString(hmac.ComputeHash(Encoding.UTF8.GetBytes(canonical)));
-    }
-
-    private static bool FixedTimeEquals(string expectedHex, string? receivedHex)
-    {
-        if (string.IsNullOrWhiteSpace(receivedHex)) return false;
-        try
-        {
-            byte[] expected = Convert.FromHexString(expectedHex);
-            byte[] received = Convert.FromHexString(receivedHex);
-            return expected.Length == received.Length &&
-                   CryptographicOperations.FixedTimeEquals(expected, received);
-        }
-        catch (FormatException) { return false; }
-    }
-
     public void Dispose()
     {
         lifetime.Cancel();
@@ -228,8 +252,7 @@ public sealed class LanPeerDiscovery : IDisposable
         string InstanceId,
         string AccountLabel,
         string PluginVersion,
-        long SentAtUnixMs,
-        string Auth);
+        long SentAtUnixMs);
 }
 
 public sealed record LanPeerInfo(
