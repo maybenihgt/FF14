@@ -946,6 +946,7 @@ $newTryChooseStart = @'
             log.Warning($"[AutoPlayLoop] ignored unverified Ron UI flag; no authoritative opponent discard/kakan is available (state={snapshot.AddonStateCode}, hand={snapshot.Hand.Count}).");
         }
 '@
+$newTryChooseStart = $newTryChooseStart -replace "`r`n?", "`n"
 if (-not $auto.Contains('[AutoPlayLoop] ignored unverified Ron UI flag')) {
     if (-not $auto.Contains($oldTryChooseStart)) { throw 'SP1.9 TryChoose insertion point not found.' }
     $auto = $auto.Replace($oldTryChooseStart, $newTryChooseStart.TrimEnd())
@@ -1001,6 +1002,8 @@ $newPromotedGuard = @'
                 }
             }
 '@
+$oldPromotedGuard = $oldPromotedGuard -replace "`r`n?", "`n"
+$newPromotedGuard = $newPromotedGuard -replace "`r`n?", "`n"
 if ($auto.Contains($oldPromotedGuard)) {
     $auto = $auto.Replace($oldPromotedGuard, $newPromotedGuard.TrimEnd())
 }
