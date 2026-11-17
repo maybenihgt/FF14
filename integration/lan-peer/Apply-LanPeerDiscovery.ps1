@@ -14,9 +14,6 @@ $configAdd = @'
     /// <summary>One of MAIN_A, MAIN_B, ALT_C or ALT_D. This is a display label, not an account credential.</summary>
     public string LanPeerAccountLabel { get; init; } = "MAIN_A";
 
-    /// <summary>Shared random LAN room secret. Only an HMAC is transmitted; the secret itself is never sent.</summary>
-    public string LanPeerRoomCode { get; init; } = "";
-
 '@
 if (-not $config.Contains($configMarker)) { throw 'Configuration insertion marker not found.' }
 if (-not $config.Contains('LanPeerDiscoveryEnabled')) {
@@ -40,8 +37,7 @@ $configServiceMarker = '        ConfigService = Services.GetRequiredService<ICon
 $createPeers = @'
         LanPeers = new LanPeerDiscovery(
             () => Configuration.LanPeerDiscoveryEnabled,
-            () => Configuration.LanPeerAccountLabel,
-            () => Configuration.LanPeerRoomCode);
+            () => Configuration.LanPeerAccountLabel);
 '@
 if (-not $plugin.Contains('LanPeers = new LanPeerDiscovery(')) {
     if (-not $plugin.Contains($configServiceMarker)) { throw 'Plugin service initialization marker not found.' }
@@ -56,13 +52,42 @@ Set-Content -Path $pluginPath -Value $plugin -NoNewline
 
 $windowPath = 'upstream/Mahjong.Plugin.Dalamud/UI/MainWindow.cs'
 $window = Get-Content $windowPath -Raw
-if (-not $window.Contains('using System.Security.Cryptography;')) {
-    $window = $window.Replace('using System.Numerics;', 'using System.Numerics;' + [Environment]::NewLine + 'using System.Security.Cryptography;')
-}
-$drawMarker = '        DrawModeCard(cfg);'
-if (-not $window.Contains('        DrawLanPeerCard(cfg);')) {
-    if (-not $window.Contains($drawMarker)) { throw 'Main window draw insertion marker not found.' }
-    $window = $window.Replace($drawMarker, $drawMarker + [Environment]::NewLine + '        ImGui.Dummy(new Vector2(0, 4));' + [Environment]::NewLine + '        DrawLanPeerCard(cfg);')
+$drawOld = @'
+        DrawModeCard(cfg);
+        ImGui.Dummy(new Vector2(0, 4));
+        DrawCollectionCard(cfg);
+        ImGui.Dummy(new Vector2(0, 4));
+        DrawLiveCard();
+
+        DrawAutoPlayConfirmModal(cfg);
+'@
+$drawNew = @'
+        if (ImGui.BeginTabBar("##mahjong-main-mode-tabs"))
+        {
+            if (ImGui.BeginTabItem(Loc.T("Single-player", "单人模式")))
+            {
+                DrawModeCard(cfg);
+                ImGui.Dummy(new Vector2(0, 4));
+                DrawCollectionCard(cfg);
+                ImGui.Dummy(new Vector2(0, 4));
+                DrawLiveCard();
+                ImGui.EndTabItem();
+            }
+
+            if (ImGui.BeginTabItem(Loc.T("Multiplayer", "多人模式")))
+            {
+                DrawLanPeerCard(cfg);
+                ImGui.EndTabItem();
+            }
+
+            ImGui.EndTabBar();
+        }
+
+        DrawAutoPlayConfirmModal(cfg);
+'@
+if (-not $window.Contains('if (ImGui.BeginTabBar("##mahjong-main-mode-tabs"))')) {
+    if (-not $window.Contains($drawOld)) { throw 'Main window draw block not found.' }
+    $window = $window.Replace($drawOld, $drawNew)
 }
 $methodMarker = '    private void DrawCollectionCard(Configuration cfg)'
 $method = @'
@@ -72,8 +97,8 @@ $method = @'
         {
             Theme.SectionHeader(Loc.T("UU LAN peers", "UU 局域网节点"));
             ImGui.TextWrapped(Loc.T(
-                "Discovers other plugin instances on the same virtual LAN. Only account label, plugin version and online presence are exchanged; game state and tiles are never sent.",
-                "自动发现同一虚拟局域网内的插件实例。只交换账号标签、插件版本和在线状态，不发送游戏状态或手牌。"));
+                "Join the same UU cloud LAN room on each PC. The plugin discovers peers automatically; no separate plugin room code is needed.",
+                "每台电脑手动加入同一个 UU 云联机房间即可。插件会自动发现节点，不需要额外的插件房间码。"));
 
             bool enabled = cfg.LanPeerDiscoveryEnabled;
             if (ImGui.Checkbox(Loc.T("Enable peer discovery", "启用节点发现") + "##lan-peer-enabled", ref enabled))
@@ -89,37 +114,33 @@ $method = @'
             if (ImGui.Button("ALT_D##lan-peer-label-d")) plugin.ConfigService.Update(c => c with { LanPeerAccountLabel = "ALT_D" });
             Theme.Subtle(Loc.T($"Selected label: {cfg.LanPeerAccountLabel}", $"当前标签：{cfg.LanPeerAccountLabel}"));
 
-            ImGui.TextUnformatted(Loc.T("Shared room code (same on every PC; 12+ characters)", "共享房间码（所有电脑必须一致，至少 12 个字符）"));
-            string roomCode = cfg.LanPeerRoomCode;
-            ImGui.SetNextItemWidth(-1);
-            if (ImGui.InputText("##lan-peer-room-code", ref roomCode, 128))
-                plugin.ConfigService.Update(c => c with { LanPeerRoomCode = roomCode.Trim() });
-            if (ImGui.Button(Loc.T("Generate and copy room code", "生成并复制房间码") + "##lan-peer-generate"))
-            {
-                string generated = Convert.ToHexString(RandomNumberGenerator.GetBytes(16));
-                plugin.ConfigService.Update(c => c with { LanPeerRoomCode = generated });
-                ImGui.SetClipboardText(generated);
-            }
-
             ImGui.Separator();
             var peers = plugin.LanPeers.Peers;
             Theme.Subtle(Loc.T($"Discovered peers: {peers.Count}", $"已发现节点：{peers.Count}"));
             if (peers.Count == 0)
-                Theme.Subtle(Loc.T("No peers yet. Enable discovery on both PCs, use the same room code, and allow inbound UDP 47721 on the private network.", "尚未发现其他节点。请在两台电脑启用发现、填写相同房间码，并允许专用网络的 UDP 47721 入站。"));
+                Theme.Subtle(Loc.T(
+                    "No peers yet. Enable discovery on each PC and allow inbound UDP 47721 on the Windows Private firewall profile. UU must forward IPv4 broadcast traffic.",
+                    "尚未发现节点。请在每台电脑启用节点发现，并允许 Windows 专用网络的 UDP 47721 入站；UU 网络需要支持转发 IPv4 广播。"));
             foreach (var peer in peers)
                 ImGui.BulletText($"{peer.AccountLabel}  |  {peer.Address}  |  {peer.LastSeenUtc.ToLocalTime():HH:mm:ss}");
 
             if (!string.IsNullOrWhiteSpace(plugin.LanPeers.LastError))
                 Theme.Subtle(plugin.LanPeers.LastError);
-            Theme.Subtle(Loc.T("Peers expire after 8 seconds without a heartbeat. UDP broadcast may be blocked by some VPN adapters or firewall profiles.", "节点连续 8 秒没有心跳就会消失。部分虚拟网卡或防火墙配置可能会阻止 UDP 广播。"));
+
+            Theme.Subtle(Loc.T(
+                "Discovery is limited to the same local IPv4 subnet. Other plugin users on that subnet may also appear. Only instance ID, account label, plugin version and timestamp are broadcast; these presence packets are not cryptographically authenticated.",
+                "发现范围是本机可见的 IPv4 子网。同一子网内其他启用插件的用户也可能出现。广播内容只有实例 ID、账号标签、插件版本和时间戳；在线广播不提供密码学身份认证。"));
+            Theme.Subtle(Loc.T(
+                "Peers expire after 8 seconds without a heartbeat. Some virtual-LAN adapters or firewall settings may block UDP broadcast.",
+                "节点连续 8 秒没有心跳就会消失。部分虚拟网卡或防火墙设置可能阻止 UDP 广播。"));
         }
     }
 
-'@
+'@'@
 if (-not $window.Contains('    private void DrawLanPeerCard(Configuration cfg)')) {
     if (-not $window.Contains($methodMarker)) { throw 'Main window method insertion marker not found.' }
     $window = $window.Replace($methodMarker, $method + $methodMarker)
 }
 Set-Content -Path $windowPath -Value $window -NoNewline
 
-Write-Host 'LAN peer discovery overlay applied. Protocol exchanges authenticated presence only; no game-state payload is defined.'
+Write-Host 'LAN peer discovery overlay applied. No app room code; same-subnet presence only; no game-state payload is defined.'
