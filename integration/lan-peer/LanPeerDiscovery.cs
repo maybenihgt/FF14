@@ -107,8 +107,6 @@ public sealed class LanPeerDiscovery : IDisposable
         get
         {
             var all = Roster;
-            if (all.Count != 4)
-                return false;
             string key = CurrentMatchKey;
             if (string.IsNullOrEmpty(key))
                 return false;
@@ -151,16 +149,15 @@ public sealed class LanPeerDiscovery : IDisposable
             (snapshot.Observations & RequiredPublicObservations) != RequiredPublicObservations)
             return string.Empty;
 
-        // Stable through a hand: do not include rivers, wall count or current turn.
-        // These fields can update a few frames apart on separate clients.
+        // Snapshots are relative to the local player: each client sees itself as seat 0.
+        // DealerSeat and InitialDealerSeat therefore differ between clients at the same table.
+        // Use only perspective-invariant match context and the sorted score vector.
         string scoreVector = string.Join(",", snapshot.Scores.Order());
         string value = string.Join("|",
             snapshot.RoundWind,
             snapshot.Kyoku ?? 0,
             snapshot.Honba,
             snapshot.RiichiSticks,
-            snapshot.DealerSeat,
-            snapshot.InitialDealerSeat ?? -1,
             snapshot.ScheduledRounds ?? -1,
             scoreVector);
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value)));
