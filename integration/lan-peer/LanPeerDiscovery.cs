@@ -7,21 +7,20 @@ using System.Text.Json;
 namespace Mahjong.Plugin.Dalamud.Networking;
 
 /// <summary>
-/// Broadcasts presence on active IPv4 subnets. This is intentionally an untrusted,
-/// presence-only protocol: no hand, tile, score, opponent, game-state or action data
-/// is ever exchanged. The local subnet is the discovery boundary; there is no app
-/// room secret because users already join the same virtual LAN manually.
+/// Broadcasts presence on active IPv4 subnets. This is intentionally a presence-only
+/// protocol: no hand, tile, score, opponent, game-state or action data is exchanged.
+/// Users join the same UU virtual LAN manually; the local IPv4 subnet is the discovery boundary.
 /// </summary>
 public sealed class LanPeerDiscovery : IDisposable
 {
     public const int DefaultPort = 47721;
-    private const string Protocol = "doman-mahjong-peer-v2";
+    private const string Protocol = "doman-mahjong-peer-v3";
     private const int MaxPacketBytes = 2048;
     private static readonly TimeSpan PeerExpiry = TimeSpan.FromSeconds(8);
     private static readonly TimeSpan BroadcastInterval = TimeSpan.FromSeconds(2);
 
     private readonly Func<bool> enabled;
-    private readonly Func<string> accountLabel;
+    private readonly Func<string> accountType;
     private readonly string instanceId = Guid.NewGuid().ToString("N");
     private readonly ConcurrentDictionary<string, LanPeerInfo> peers = new();
     private readonly CancellationTokenSource lifetime = new();
@@ -29,18 +28,40 @@ public sealed class LanPeerDiscovery : IDisposable
     private readonly Task broadcasterTask;
     private string lastError = string.Empty;
 
-    public LanPeerDiscovery(Func<bool> enabled, Func<string> accountLabel)
+    public LanPeerDiscovery(Func<bool> enabled, Func<string> accountType)
     {
         this.enabled = enabled;
-        this.accountLabel = accountLabel;
+        this.accountType = accountType;
         receiverTask = Task.Run(() => ReceiveLoopAsync(lifetime.Token));
         broadcasterTask = Task.Run(() => BroadcastLoopAsync(lifetime.Token));
     }
 
+    public string InstanceId => instanceId;
+
+    public string AccountType => NormalizeAccountType(accountType());
+
     public IReadOnlyList<LanPeerInfo> Peers => peers.Values
-        .OrderBy(p => p.AccountLabel, StringComparer.Ordinal)
-        .ThenBy(p => p.Address, StringComparer.Ordinal)
+        .OrderBy(p => p.InstanceId, StringComparer.Ordinal)
         .ToArray();
+
+    /// <summary>Same sorted roster is shown on every client: local instance plus visible LAN peers.</summary>
+    public IReadOnlyList<LanPeerInfo> Roster
+    {
+        get
+        {
+            if (!enabled())
+                return Array.Empty<LanPeerInfo>();
+
+            var all = peers.Values.ToList();
+            all.Add(new LanPeerInfo(
+                instanceId,
+                AccountType,
+                "本机",
+                typeof(LanPeerDiscovery).Assembly.GetName().Version?.ToString() ?? "unknown",
+                DateTimeOffset.UtcNow));
+            return all.OrderBy(p => p.InstanceId, StringComparer.Ordinal).ToArray();
+        }
+    }
 
     public string LastError => Volatile.Read(ref lastError);
 
@@ -54,12 +75,11 @@ public sealed class LanPeerDiscovery : IDisposable
                 PruneExpiredPeers();
                 if (enabled())
                 {
-                    string label = NormalizeLabel(accountLabel());
                     long sentAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
                     var frame = new PresenceFrame(
                         Protocol,
                         instanceId,
-                        label,
+                        AccountType,
                         typeof(LanPeerDiscovery).Assembly.GetName().Version?.ToString() ?? "unknown",
                         sentAt);
                     byte[] payload = JsonSerializer.SerializeToUtf8Bytes(frame);
@@ -114,7 +134,7 @@ public sealed class LanPeerDiscovery : IDisposable
                         frame.InstanceId.Length > 64 ||
                         string.IsNullOrWhiteSpace(frame.PluginVersion) ||
                         frame.PluginVersion.Length > 32 ||
-                        !IsValidLabel(frame.AccountLabel))
+                        !IsValidAccountType(frame.AccountType))
                         continue;
 
                     long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
@@ -125,7 +145,7 @@ public sealed class LanPeerDiscovery : IDisposable
 
                     peers[frame.InstanceId] = new LanPeerInfo(
                         frame.InstanceId,
-                        frame.AccountLabel,
+                        frame.AccountType,
                         datagram.RemoteEndPoint.Address.ToString(),
                         frame.PluginVersion,
                         DateTimeOffset.UtcNow);
@@ -234,10 +254,11 @@ public sealed class LanPeerDiscovery : IDisposable
         }
     }
 
-    private static string NormalizeLabel(string? value) => IsValidLabel(value) ? value! : "UNASSIGNED";
+    private static string NormalizeAccountType(string? value) =>
+        value is "大号" or "BIG" ? "大号" : "小号";
 
-    private static bool IsValidLabel(string? value) =>
-        value is "MAIN_A" or "MAIN_B" or "ALT_C" or "ALT_D" or "UNASSIGNED";
+    private static bool IsValidAccountType(string? value) =>
+        value is "大号" or "小号";
 
     public void Dispose()
     {
@@ -250,14 +271,14 @@ public sealed class LanPeerDiscovery : IDisposable
     private sealed record PresenceFrame(
         string Protocol,
         string InstanceId,
-        string AccountLabel,
+        string AccountType,
         string PluginVersion,
         long SentAtUnixMs);
 }
 
 public sealed record LanPeerInfo(
     string InstanceId,
-    string AccountLabel,
+    string AccountType,
     string Address,
     string PluginVersion,
     DateTimeOffset LastSeenUtc);
