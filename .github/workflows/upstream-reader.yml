@@ -511,6 +511,22 @@ jobs:
         shell: pwsh
         run: ./integration-repo/integration/lan-peer/Apply-BigAccountAggressiveCalls.ps1
 
+      - name: Match local game tables without requiring MJAI protocol admission
+        shell: pwsh
+        run: ./integration-repo/integration/lan-peer/Apply-LocalTableIdentity.ps1
+
+      - name: Speed up all multiplayer accounts
+        shell: pwsh
+        run: ./integration-repo/integration/lan-peer/Apply-TeamFastPacing.ps1
+
+      - name: Map hand highlights to actual addon slots
+        shell: pwsh
+        run: ./integration-repo/integration/lan-peer/Apply-AddonSlotHighlight.ps1
+
+      - name: Show build version in the main window title
+        shell: pwsh
+        run: ./integration-repo/integration/lan-peer/Apply-WindowBuildVersion.ps1
+
       - name: Build plugin
         working-directory: upstream
         run: dotnet build Mahjong.Plugin.Dalamud/Mahjong.Plugin.Dalamud.csproj --configuration Release --no-restore
