@@ -62,3 +62,9 @@ On every plugin load, startup configuration initialization resets `ContinuousCol
 ## Hide unused local-capture settings UI
 
 The CN candidate build removes the SettingsWindow cards for Debug packet logger, Memory snapshots, and Training data archive. Their internal services and configuration fields remain for source compatibility but are not user-configurable from this build's normal settings UI; privacy-sensitive options stay disabled by default. Existing files in `debug-packets`, `memdumps`, and `training-data` are not automatically deleted when recording is disabled or the UI is hidden. The user may manually delete old files after closing the game/plugin if they no longer want them.
+
+## Four-client LAN roster and account roles
+
+The current Multiplayer tab displays up to four plugin instances visible on the same IPv4 subnet. Each client defaults to the **small account** role; only an explicit selection marks it as a **big account**. The previous MAIN_A / MAIN_B / ALT_C / ALT_D labels are removed.
+
+This roster is presence discovery only. It does not create an FFXIV Mahjong match or synchronize live hands, discards, scores, game state, or actions. The older `backend/team_room.py` remains a separate 2v2 sandbox prototype for manual JSON snapshots and post-match rating statistics; it is not live four-player gameplay.
