@@ -722,7 +722,8 @@ Set-Content -Path $windowPath -Value $window -NoNewline
 $autoPath = 'upstream/Mahjong.Plugin.Dalamud/Actions/AutoPlayLoop.cs'
 $auto = Get-Content $autoPath -Raw
 
-$sourceNewline = [regex]::Match($auto, '\r?\n').Value`n$policyMarker = '    private void DispatchPolicyChoice(StateSnapshot snap, ActionChoice choice)' + $sourceNewline + '    {'
+$sourceNewline = [regex]::Match($auto, '\r?\n').Value
+$policyMarker = '    private void DispatchPolicyChoice(StateSnapshot snap, ActionChoice choice)' + $sourceNewline + '    {'
 $policyGuard = @'
     private void DispatchPolicyChoice(StateSnapshot snap, ActionChoice choice)
     {
