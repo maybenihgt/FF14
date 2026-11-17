@@ -245,7 +245,18 @@ public sealed class PublicTableStateSync : IDisposable
             return;
 
         remoteStates[frame.InstanceId] = new RemotePublicTableState(
-            frame, remoteAddress.ToString(), DateTimeOffset.UtcNow);
+            frame.InstanceId,
+            frame.AccountType,
+            remoteAddress.ToString(),
+            frame.PluginVersion,
+            frame.RoundWind,
+            frame.Kyoku,
+            frame.Honba,
+            frame.WallRemaining,
+            frame.Scores.ToArray(),
+            frame.DoraIndicators.ToArray(),
+            frame.Seats.Select(x => x.DiscardCount).ToArray(),
+            DateTimeOffset.UtcNow);
         Interlocked.Increment(ref framesReceived);
         Volatile.Write(ref lastError, string.Empty);
     }
@@ -286,7 +297,7 @@ public sealed class PublicTableStateSync : IDisposable
 
             foreach (var meld in seat.Melds)
             {
-                if (meld is null || meld.Tiles is null || meld.Tiles.Length is not (3 or 4) ||
+                if (meld is null || meld.Kind is < 0 or > 4 || meld.Tiles is null || meld.Tiles.Length is not (3 or 4) ||
                     meld.Tiles.Any(x => x is < 0 or > 33) ||
                     meld.ClaimedTile is < 0 or > 33 ||
                     meld.ClaimedFromSeat is < -1 or > 3)
@@ -497,6 +508,15 @@ public sealed class PublicTableStateSync : IDisposable
 }
 
 public sealed record RemotePublicTableState(
-    object Frame,
+    string InstanceId,
+    string AccountType,
     string Address,
+    string PluginVersion,
+    int RoundWind,
+    int Kyoku,
+    int Honba,
+    int WallRemaining,
+    int[] Scores,
+    int[] DoraIndicators,
+    int[] DiscardCounts,
     DateTimeOffset LastSeenUtc);
