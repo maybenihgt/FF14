@@ -141,34 +141,8 @@ jobs:
           $source = $source.Substring(0, $methodAt) + $tail.Insert($insertAt, $insert)
           Set-Content -Path $variant -Value $source -NoNewline
 
-          $auto = 'Mahjong.Plugin.Dalamud/Actions/AutoPlayLoop.cs'
-          $source = Get-Content $auto -Raw
-          $methodWin = '    private bool TryChoose(StateSnapshot snapshot, out ActionChoice choice)'
-          $methodAt = $source.IndexOf($methodWin)
-          if ($methodAt -lt 0) { throw 'TryChoose method not found.' }
-          $prefix = $source.Substring(0, $methodAt)
-          $tail = $source.Substring($methodAt)
-          $anchorWin = '        if (plugin.MortalBridge.Enabled && !plugin.MortalBridge.CurrentHandQuarantined)'
-          $anchorAt = $tail.IndexOf($anchorWin)
-          if ($anchorAt -lt 0) { throw 'TryChoose Mortal fallback insertion point not found.' }
-          $forceWin = '        // The live game UI has already exposed a legal win action. Do not wait for Mortal.' + "`n" +
-            '        if (snapshot.Legal.Can(ActionFlags.Tsumo))' + "`n" +
-            '        {' + "`n" +
-            '            choice = ActionChoice.DeclareTsumo("game UI exposed a legal Tsumo action");' + "`n" +
-            '            hasMortalWait = false;' + "`n" +
-            '            plugin.Aggregator.PublishLocalExecution(snapshot, choice, "terminal-guard");' + "`n" +
-            '            return true;' + "`n" +
-            '        }' + "`n" +
-            '        if (snapshot.Legal.Can(ActionFlags.Ron))' + "`n" +
-            '        {' + "`n" +
-            '            choice = ActionChoice.DeclareRon("game UI exposed a legal Ron action");' + "`n" +
-            '            hasMortalWait = false;' + "`n" +
-            '            plugin.Aggregator.PublishLocalExecution(snapshot, choice, "terminal-guard");' + "`n" +
-            '            return true;' + "`n" +
-            '        }' + "`n" + "`n"
-          $tail = $tail.Insert($anchorAt, $forceWin)
-          $source = $prefix + $tail
-          Set-Content -Path $auto -Value $source -NoNewline
+          # Keep AutoPlayLoop's existing local win validator. Do not force a win
+          # solely because a stale localized button label set a legal-action flag.
 
       - name: Apply privacy-safe defaults and migrate existing settings
         shell: pwsh
