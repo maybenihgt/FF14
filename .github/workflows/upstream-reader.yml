@@ -41,6 +41,10 @@ jobs:
       - name: Apply big-account quick-win and small-account tsumogiri strategy
         shell: pwsh
         run: ./integration-repo/integration/lan-peer/Apply-TeamPlayStrategy.ps1
+ 
+      - name: Read in-game Mahjong nameplate text for identity diagnostics
+        shell: pwsh
+        run: ./integration-repo/integration/lan-peer/Apply-NameplateDiagnostics.ps1
 
       - name: Set up .NET
         uses: actions/setup-dotnet@v4
