@@ -673,7 +673,7 @@ if ($updatedCall -eq $callBlock -and -not $callBlock.Contains('strict tsumogiri:
 $auto = $auto.Substring(0, $callStart) + $updatedCall + $auto.Substring($callEnd)
 
 $terminalStart = $auto.IndexOf('    private void ScheduleTerminalWinConfirmation(')
-$terminalEnd = $auto.IndexOf('    private bool TryChoose(', $terminalStart)
+$terminalEnd = $auto.IndexOf('    private static int? OwnDiscardCount(StateSnapshot snap)', $terminalStart)
 if ($terminalStart -lt 0 -or $terminalEnd -lt 0) { throw 'Terminal confirmation method boundaries not found.' }
 $terminalBlock = $auto.Substring($terminalStart, $terminalEnd - $terminalStart)
 $terminalPattern = '(?s)            var choice = kind == ActionKind\.Ron\s*\? ActionChoice\.DeclareRon\("terminal win confirmation"\)\s*: ActionChoice\.DeclareTsumo\("terminal win confirmation"\);\s*            EmitDecisionFinding\("terminal-win-confirm", snap, choice\);\s*            DispatchCallChoice\(snap, choice\);'
