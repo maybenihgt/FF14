@@ -1,6 +1,17 @@
 # Applies diagnostic-only instrumentation to the CN single-player build.
 $ErrorActionPreference = 'Stop'
 
+function Replace-One([string]$Source, [string]$Old, [string]$New, [string]$Label) {
+    # Earlier single-player patches normalize AutoPlayLoop.cs to LF. Normalize
+    # both source and here-string anchors so Windows checkout CRLF cannot break
+    # otherwise identical source matches.
+    $Source = $Source -replace "`r`n?", "`n"
+    $Old = $Old -replace "`r`n?", "`n"
+    $New = $New -replace "`r`n?", "`n"
+    if (-not $Source.Contains($Old)) { throw "$Label anchor not found." }
+    return $Source.Replace($Old, $New)
+}
+
 $auto = 'upstream/Mahjong.Plugin.Dalamud/Actions/AutoPlayLoop.cs'
 $source = Get-Content $auto -Raw
 $oldDecision = @'
@@ -14,8 +25,7 @@ $newDecision = @'
         log.Info($"[AutoPlayDiag] decision source={source} kind={choice.Kind} tile={choice.DiscardTile} red={choice.DiscardIsRed} handCount={snap.Hand.Count} hand=[{string.Join(",", snap.Hand)}] legal={snap.Legal.Flags} state={snap.AddonStateCode}");
         if (plugin.Configuration.MortalEnabled)
 '@
-if (-not $source.Contains($oldDecision)) { throw 'AutoPlayLoop decision diagnostic anchor not found.' }
-$source = $source.Replace($oldDecision, $newDecision)
+$source = Replace-One $source $oldDecision $newDecision 'AutoPlayLoop decision diagnostic'
 
 $oldFinding = @'
             ["path"] = plugin.Dispatcher.LastDispatchPath,
@@ -26,8 +36,7 @@ $newFinding = @'
             ["callback_results"] = plugin.Dispatcher.LastDiscardCallbackResults,
             ["cur_state"] = snap?.AddonStateCode,
 '@
-if (-not $source.Contains($oldFinding)) { throw 'AutoPlayLoop dispatch finding anchor not found.' }
-$source = $source.Replace($oldFinding, $newFinding)
+$source = Replace-One $source $oldFinding $newFinding 'AutoPlayLoop dispatch finding'
 
 $oldPending = @'
         plugin.GameLogger.RecordActionOutcome(pending.ActionId, pending.Label, status, pending.LastDispatchPath);
@@ -36,8 +45,7 @@ $newPending = @'
         plugin.GameLogger.RecordActionOutcome(pending.ActionId, pending.Label, status, pending.LastDispatchPath);
         log.Info($"[AutoPlayDiag] outcome actionId={pending.ActionId} label={pending.Label} status={status} callbackObserved={pending.CallbackObserved} path={pending.LastDispatchPath} beforeState={pending.StateAtDispatch} beforeHand={pending.HandAtDispatch} afterState={snap?.AddonStateCode} afterHand={snap?.Hand.Count}");
 '@
-if (-not $source.Contains($oldPending)) { throw 'AutoPlayLoop dispatch outcome anchor not found.' }
-$source = $source.Replace($oldPending, $newPending)
+$source = Replace-One $source $oldPending $newPending 'AutoPlayLoop dispatch outcome'
 
 $oldMatch = @'
         int slot = plugin.AddonReader.FindAddonSlotOfTile(tile, targetIsRed);
@@ -58,8 +66,7 @@ $newMatch = @'
             return;
         }
 '@
-if (-not $source.Contains($oldMatch)) { throw 'AutoPlayLoop tile matching anchor not found.' }
-$source = $source.Replace($oldMatch, $newMatch)
+$source = Replace-One $source $oldMatch $newMatch 'AutoPlayLoop tile matching'
 
 $oldDispatch = @'
         var result = plugin.Dispatcher.DispatchDiscard(slot);
@@ -71,8 +78,7 @@ $newDispatch = @'
         log.Info($"[AutoPlayDiag] dispatch-return tile={tile} slot={slot} result={result} path={plugin.Dispatcher.LastDispatchPath} callbacks={plugin.Dispatcher.LastDiscardCallbackResults}");
         LastActionDescription = $"auto-discard {tile} slot={slot} → {result}";
 '@
-if (-not $source.Contains($oldDispatch)) { throw 'AutoPlayLoop discard dispatch anchor not found.' }
-$source = $source.Replace($oldDispatch, $newDispatch)
+$source = Replace-One $source $oldDispatch $newDispatch 'AutoPlayLoop discard dispatch'
 Set-Content -Path $auto -Value $source -NoNewline
 
 $dispatcher = 'upstream/Mahjong.Plugin.Dalamud/Actions/InputDispatcher.cs'
@@ -94,8 +100,7 @@ $newProperty = @'
     /// <summary>Diagnostic-only return values from the most recent discard input path. Does not alter dispatch decisions.</summary>
     public string LastDiscardCallbackResults { get; private set; } = "(none)";
 '@
-if (-not $source.Contains($oldProperty)) { throw 'InputDispatcher diagnostic property anchor not found.' }
-$source = $source.Replace($oldProperty, $newProperty)
+$source = Replace-One $source $oldProperty $newProperty 'InputDispatcher diagnostic property'
 
 $oldStart = @'
     public unsafe DispatchResult DispatchDiscard(int slotIndex)
@@ -108,8 +113,7 @@ $newStart = @'
         LastDiscardCallbackResults = "not-attempted";
         if (slotIndex is < 0 or > 13)
 '@
-if (-not $source.Contains($oldStart)) { throw 'InputDispatcher discard start anchor not found.' }
-$source = $source.Replace($oldStart, $newStart)
+$source = Replace-One $source $oldStart $newStart 'InputDispatcher discard start'
 
 $oldHandshake = @'
                 unit->FireCallback(2, v15, true);
@@ -132,8 +136,7 @@ $newHandshake = @'
                 LastDiscardCallbackResults = $"opcode15={selectCallbackResult};opcode7={commitCallbackResult};raw={raw};slot={slotIndex}";
                 LastDiscardPath = $"opcode-15+7(raw={raw},slot={slotIndex})";
 '@
-if (-not $source.Contains($oldHandshake)) { throw 'InputDispatcher two-callback handshake anchor not found.' }
-$source = $source.Replace($oldHandshake, $newHandshake)
+$source = Replace-One $source $oldHandshake $newHandshake 'InputDispatcher two-callback handshake'
 
 $oldList = @'
         if (IsListWidgetPopupActive(unit) && TryDispatchListItemClick(unit, slotIndex))
@@ -146,8 +149,7 @@ $newList = @'
             LastDiscardCallbackResults = $"SelectItem invoked (void);slot={slotIndex}";
             LastDiscardPath = $"list-widget(slot={slotIndex})";
 '@
-if (-not $source.Contains($oldList)) { throw 'InputDispatcher list-widget anchor not found.' }
-$source = $source.Replace($oldList, $newList)
+$source = Replace-One $source $oldList $newList 'InputDispatcher list-widget'
 
 $oldFallback = @'
         bool ok = unit->FireCallback(2, values, true);
@@ -158,8 +160,7 @@ $newFallback = @'
         LastDiscardCallbackResults = $"opcode7={ok};slot={slotIndex}";
         LastDiscardPath = $"opcode-7-fallback(slot={slotIndex},ok={ok})";
 '@
-if (-not $source.Contains($oldFallback)) { throw 'InputDispatcher fallback anchor not found.' }
-$source = $source.Replace($oldFallback, $newFallback)
+$source = Replace-One $source $oldFallback $newFallback 'InputDispatcher fallback'
 Set-Content -Path $dispatcher -Value $source -NoNewline
 
 Write-Host 'Auto-discard diagnostics applied (logging only; dispatch decisions unchanged).'
