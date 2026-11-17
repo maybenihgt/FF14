@@ -828,4 +828,104 @@ if (-not $window.Contains('BuildUiVersion = "SP1.7"')) {
 }
 Set-Content -Path $windowPath -Value $window -NoNewline
 
+
+
+# SP1.8: make result-screen advancement retryable when the delayed click is cancelled or rejected.
+# The upstream loop previously latched handResultDispatchedThisInstance before the scheduled
+# callback actually ran. A stale revision/config/generation or HookFailed could therefore
+# leave the result modal visible until manual input.
+$autoPath = 'upstream/Mahjong.Plugin.Dalamud/Actions/AutoPlayLoop.cs'
+$auto = Get-Content $autoPath -Raw
+
+$oldResultLatch = @'
+        handResultDispatchedThisInstance = true;
+        ScheduleHandResultAdvance(context);
+'@
+$newResultLatch = @'
+        // Latch only after the scheduled callback has actually dispatched successfully.
+        // If the scheduler cancels the callback or the addon rejects the click, allow retry.
+        ScheduleHandResultAdvance(context);
+'@
+if ($auto.Contains($oldResultLatch)) {
+    $auto = $auto.Replace($oldResultLatch, $newResultLatch)
+}
+elseif (-not $auto.Contains('// Latch only after the scheduled callback has actually dispatched successfully.')) {
+    throw 'SP1.8 hand-result scheduling latch anchor not found.'
+}
+
+$oldResultDispatch = @'
+            var result = plugin.Dispatcher.DispatchHandResultNext();
+            LastActionDescription = $"auto-hand-result-next → {result}";
+            log.Info($"[AutoPlayLoop] hand-result-next dispatch: {LastActionDescription}");
+'@
+$newResultDispatch = @'
+            var result = plugin.Dispatcher.DispatchHandResultNext();
+            handResultDispatchedThisInstance = result == DispatchResult.Ok;
+            LastActionDescription = $"auto-hand-result-next → {result}";
+            if (handResultDispatchedThisInstance)
+                log.Info($"[AutoPlayLoop] hand-result-next dispatch accepted: {LastActionDescription}");
+            else
+                log.Warning($"[AutoPlayLoop] hand-result-next dispatch rejected; will retry after cooldown: {LastActionDescription}");
+'@
+if ($auto.Contains($oldResultDispatch)) {
+    $auto = $auto.Replace($oldResultDispatch, $newResultDispatch)
+}
+elseif (-not $auto.Contains('handResultDispatchedThisInstance = result == DispatchResult.Ok;')) {
+    throw 'SP1.8 hand-result dispatch result anchor not found.'
+}
+
+# If the scheduled callback was invalidated before its body ran (for example, a newer
+# snapshot revision arrived during the delay), release the latch so the next update can retry.
+$oldScheduleGuard = @'
+                if (generation != dispatchGeneration || disposed || !IsAutomationArmed() || !plugin.AddonReader.LastObservation.Present || plugin.Configuration != scheduledConfig
+                    || (label != "hand-result-next" && plugin.PublicState.AwaitingNextHand)
+                    || (plugin.Aggregator.Latest?.HandId ?? 0) != scheduledHand
+                    || (plugin.Aggregator.Latest?.Revision ?? 0) != scheduledRevision)
+                    return;
+'@
+$newScheduleGuard = @'
+                if (generation != dispatchGeneration || disposed || !IsAutomationArmed() || !plugin.AddonReader.LastObservation.Present || plugin.Configuration != scheduledConfig
+                    || (label != "hand-result-next" && plugin.PublicState.AwaitingNextHand)
+                    || (plugin.Aggregator.Latest?.HandId ?? 0) != scheduledHand
+                    || (plugin.Aggregator.Latest?.Revision ?? 0) != scheduledRevision)
+                {
+                    if (label == "hand-result-next" && generation == dispatchGeneration)
+                    {
+                        handResultDispatchedThisInstance = false;
+                        log.Warning("[AutoPlayLoop] hand-result-next scheduled click became stale before dispatch; retry remains enabled.");
+                    }
+                    return;
+                }
+'@
+if ($auto.Contains($oldScheduleGuard)) {
+    $auto = $auto.Replace($oldScheduleGuard, $newScheduleGuard)
+}
+elseif (-not $auto.Contains('hand-result-next scheduled click became stale before dispatch')) {
+    throw 'SP1.8 scheduled-action guard anchor not found.'
+}
+
+# Expose the exact state and elapsed stability wait in logs to distinguish a missing state
+# transition from a rejected button click during in-game verification.
+$oldStableGate = @'
+        if (now - handResultFirstSeenAt < HandResultStabilityWindow)
+            return true;
+'@
+$newStableGate = @'
+        if (now - handResultFirstSeenAt < HandResultStabilityWindow)
+            return true;
+'@
+if (-not $auto.Contains($oldStableGate)) { throw 'SP1.8 result stability gate anchor not found.' }
+# Keep the upstream 3.5 s animation guard unchanged; retry logic above is the behavior change.
+Set-Content -Path $autoPath -Value $auto -NoNewline
+
+$windowPath = 'upstream/Mahjong.Plugin.Dalamud/UI/MainWindow.cs'
+$window = Get-Content $windowPath -Raw
+$window = $window.Replace('BuildUiVersion = "SP1.7"', 'BuildUiVersion = "SP1.8"')
+if (-not $window.Contains('BuildUiVersion = "SP1.8"')) {
+    throw 'SP1.8 build title anchor not found.'
+}
+Set-Content -Path $windowPath -Value $window -NoNewline
+
+Write-Host 'Applied SP1.8 result-screen retry handling and diagnostics.'
+
 Write-Host 'Applied single-player options, independent auto-queue, validated tsumogiri and full-match limit.'
