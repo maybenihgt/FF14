@@ -717,4 +717,114 @@ $newTitle = 'WindowName = Loc.T("Doman Mahjong Solver", "多玛麻将助手") + 
 if ($window.Contains($oldTitle)) { $window = $window.Replace($oldTitle, $newTitle) }
 Set-Content -Path $windowPath -Value $window -NoNewline
 
+
+# SP1.7: block every riichi route in feeder mode and pre-JIT the local policy before the first hand.
+$autoPath = 'upstream/Mahjong.Plugin.Dalamud/Actions/AutoPlayLoop.cs'
+$auto = Get-Content $autoPath -Raw
+
+$policyMarker = '    private void DispatchPolicyChoice(StateSnapshot snap, ActionChoice choice)' + [Environment]::NewLine + '    {'
+$policyGuard = @'
+    private void DispatchPolicyChoice(StateSnapshot snap, ActionChoice choice)
+    {
+        if (plugin.Configuration.AutoPlayMode == AutoPlayMode.Tsumogiri
+            && choice.Kind == ActionKind.Riichi)
+        {
+            LastActionDescription = "strict tsumogiri safety: blocked Riichi policy choice";
+            log.Warning($"[AutoPlayLoop] {LastActionDescription}");
+            return;
+        }
+'@
+if (-not $auto.Contains('strict tsumogiri safety: blocked Riichi policy choice')) {
+    if (-not $auto.Contains($policyMarker)) { throw 'SP1.7 policy dispatch guard anchor not found.' }
+    $auto = $auto.Replace($policyMarker, $policyGuard.TrimEnd())
+}
+
+$callMarker = '    private void DispatchCallChoice(StateSnapshot snap, ActionChoice choice)' + [Environment]::NewLine + '    {'
+$callGuard = @'
+    private void DispatchCallChoice(StateSnapshot snap, ActionChoice choice)
+    {
+        if (plugin.Configuration.AutoPlayMode == AutoPlayMode.Tsumogiri)
+        {
+            snap = plugin.Aggregator.Enrich(snap);
+            if (snap.Legal.Can(ActionFlags.Pass))
+            {
+                var pass = ActionChoice.Pass("strict tsumogiri: pass every call, Ron and Tsumo prompt");
+                DispatchPass(snap, pass);
+            }
+            else
+            {
+                LastActionDescription = "strict tsumogiri paused: call prompt has no legal Pass";
+                log.Warning($"[AutoPlayLoop] {LastActionDescription}");
+            }
+            return;
+        }
+'@
+if (-not $auto.Contains('strict tsumogiri: pass every call, Ron and Tsumo prompt')) {
+    if (-not $auto.Contains($callMarker)) { throw 'SP1.7 call dispatch guard anchor not found.' }
+    $auto = $auto.Replace($callMarker, $callGuard.TrimEnd())
+}
+Set-Content -Path $autoPath -Value $auto -NoNewline
+
+# Warm the local policy's JIT/scoring path during plugin construction, before the first hand.
+$statePath = 'upstream/Mahjong.Plugin.Dalamud/GameState/StateAggregator.cs'
+$state = Get-Content $statePath -Raw
+if (-not $state.Contains('using Mahjong.Core;')) {
+    $state = $state.Replace('using System;' + [Environment]::NewLine, 'using System;' + [Environment]::NewLine + 'using Mahjong.Core;' + [Environment]::NewLine)
+}
+$ctorMarker = '        this.configuration = configuration;' + [Environment]::NewLine
+$warmupCall = '        this.configuration = configuration;' + [Environment]::NewLine +
+    '        _ = PolicyJitWarmup.Value;' + [Environment]::NewLine
+if (-not $state.Contains('PolicyJitWarmup.Value')) {
+    if (-not $state.Contains($ctorMarker)) { throw 'SP1.7 StateAggregator constructor anchor not found.' }
+    $state = $state.Replace($ctorMarker, $warmupCall)
+}
+$fieldMarker = '    private bool disposed;' + [Environment]::NewLine
+$warmupFields = @'
+    private bool disposed;
+    private static readonly Lazy<bool> PolicyJitWarmup = new(WarmupPolicyJit, true);
+
+    private static bool WarmupPolicyJit()
+    {
+        try
+        {
+            var hand = Tiles.Parse("123m456m789p123s11z");
+            var legal = new LegalActions(
+                ActionFlags.Discard, hand.Distinct().ToArray(), [], [], [], DiscardRestrictionKnown: true);
+            var sample = StateSnapshot.Empty with
+            {
+                Hand = hand,
+                Legal = legal,
+                SeatInfoKnown = true,
+                PublicStateConsistent = true,
+                OurSeat = 0,
+                SeatWind = 0,
+                RoundWind = 0,
+                DealerSeat = 0,
+                Scores = [25000, 25000, 25000, 25000],
+            };
+            _ = new EfficiencyPolicy(new Mahjong.Rules.Rulesets.DomanRuleSet()).Analyze(sample);
+            return true;
+        }
+        catch
+        {
+            // Warm-up is best-effort and must never prevent plugin startup.
+            return false;
+        }
+    }
+'@
+if (-not $state.Contains('private static bool WarmupPolicyJit()')) {
+    if (-not $state.Contains($fieldMarker)) { throw 'SP1.7 StateAggregator field anchor not found.' }
+    $state = $state.Replace($fieldMarker, $warmupFields.TrimEnd() + [Environment]::NewLine)
+}
+Set-Content -Path $statePath -Value $state -NoNewline
+
+# Mark this build distinctly in the main window title.
+$windowPath = 'upstream/Mahjong.Plugin.Dalamud/UI/MainWindow.cs'
+$window = Get-Content $windowPath -Raw
+$window = $window.Replace('BuildUiVersion = "SP1.6"', 'BuildUiVersion = "SP1.7"')
+if (-not $window.Contains('BuildUiVersion = "SP1.7"')) {
+    throw 'SP1.7 build title anchor not found.'
+}
+Set-Content -Path $windowPath -Value $window -NoNewline
+
 Write-Host 'Applied single-player options, independent auto-queue, validated tsumogiri and full-match limit.'
