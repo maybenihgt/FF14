@@ -496,8 +496,21 @@ jobs:
         run: ./integration-repo/integration/Apply-SinglePlayerFeatures.ps1
 
       - name: Build plugin
+        shell: pwsh
         working-directory: upstream
-        run: dotnet build Mahjong.Plugin.Dalamud/Mahjong.Plugin.Dalamud.csproj --configuration Release --no-restore
+        run: |
+          dotnet build Mahjong.Plugin.Dalamud/Mahjong.Plugin.Dalamud.csproj --configuration Release --no-restore --verbosity normal *> single-player-build.log
+          $buildExit = $LASTEXITCODE
+          Get-Content single-player-build.log | Select-Object -Last 180 | ForEach-Object { Write-Host $_ }
+          if ($buildExit -ne 0) { exit $buildExit }
+
+      - name: Upload build diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: DomanMahjongSolver-SinglePlayer-Build-Log
+          path: upstream/single-player-build.log
+          if-no-files-found: warn
 
       - name: Upload plugin package
         uses: actions/upload-artifact@v4
