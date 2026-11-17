@@ -577,12 +577,92 @@ if ($auto.Contains($oldAwaiting)) { $auto = $auto.Replace($oldAwaiting, $newAwai
 elseif (-not $auto.Contains('bool awaitingNextHand = plugin.PublicState.AwaitingNextHand;')) { throw 'AwaitingNextHand gate insertion point not found.' }
 Set-Content -Path $autoPath -Value $auto -NoNewline
 
+
+# Tsumogiri policy must never make an open call. Keep legal wins, pass all other
+# opponent/self-call prompts, and recover a post-call discard with the normal legal policy.
+$autoPath = 'upstream/Mahjong.Plugin.Dalamud/Actions/AutoPlayLoop.cs'
+$auto = Get-Content $autoPath -Raw
+
+$oldCallChoice = @'
+            if (!TryChoose(snap, out var choice))
+            {
+                LastActionDescription = "waiting for Mortal call decision";
+                fsm.ClearContext();
+                return;
+            }
+'@
+$newCallChoice = @'
+            ActionChoice choice;
+            if (plugin.Configuration.AutoPlayMode == AutoPlayMode.Tsumogiri)
+            {
+                hasMortalWait = false;
+                if (snap.Legal.Can(ActionFlags.Tsumo))
+                    choice = ActionChoice.DeclareTsumo("tsumogiri mode: accept legal self-draw win");
+                else if (snap.Legal.Can(ActionFlags.Ron))
+                    choice = ActionChoice.DeclareRon("tsumogiri mode: accept legal discard win");
+                else if (snap.Legal.Can(ActionFlags.Pass))
+                    choice = ActionChoice.Pass("tsumogiri mode: decline calls and wait for own draw");
+                else
+                {
+                    LastActionDescription = "tsumogiri mode: no legal pass/win action; waiting without calling";
+                    fsm.ClearContext();
+                    return;
+                }
+            }
+            else if (!TryChoose(snap, out choice))
+            {
+                LastActionDescription = "waiting for Mortal call decision";
+                fsm.ClearContext();
+                return;
+            }
+'@
+if ($auto.Contains($oldCallChoice)) { $auto = $auto.Replace($oldCallChoice, $newCallChoice) }
+elseif (-not $auto.Contains('tsumogiri mode: decline calls and wait for own draw')) { throw 'Call decision choice anchor not found.' }
+
+$oldTsumogiriFailure = @'
+                if (!TryChooseTsumogiri(snap, out choice, out drawnSlot, out drawnIsRed, out string tsumogiriError))
+                {
+                    LastActionDescription = $"tsumogiri paused: {tsumogiriError}";
+                    log.Warning($"[AutoPlayLoop] {LastActionDescription}");
+                    return;
+                }
+'@
+$newTsumogiriFailure = @'
+                if (!TryChooseTsumogiri(snap, out choice, out drawnSlot, out drawnIsRed, out string tsumogiriError))
+                {
+                    // A just-accepted Pon/Chi has no newly drawn tile to tsumogiri.
+                    // Use the policy to select a legal concealed discard rather than freezing
+                    // the hand or trying to discard the claimed tile parked in slot 13.
+                    if (snap.Legal.Can(ActionFlags.Discard)
+                        && TryChoose(snap, out var recoveryChoice)
+                        && (recoveryChoice.Kind is ActionKind.Discard or ActionKind.Riichi)
+                        && recoveryChoice.DiscardTile.HasValue)
+                    {
+                        choice = recoveryChoice;
+                        forceTsumogiri = false;
+                        LastActionDescription = $"post-call tsumogiri recovery: policy discard {choice.DiscardTile}";
+                        log.Warning($"[AutoPlayLoop] {LastActionDescription}; original reason: {tsumogiriError}");
+                    }
+                    else
+                    {
+                        LastActionDescription = $"tsumogiri paused: {tsumogiriError}";
+                        log.Warning($"[AutoPlayLoop] {LastActionDescription}");
+                        fsm.ClearContext();
+                        return;
+                    }
+                }
+'@
+if ($auto.Contains($oldTsumogiriFailure)) { $auto = $auto.Replace($oldTsumogiriFailure, $newTsumogiriFailure) }
+elseif (-not $auto.Contains('post-call tsumogiri recovery: policy discard')) { throw 'Tsumogiri recovery fallback anchor not found.' }
+
+Set-Content -Path $autoPath -Value $auto -NoNewline
+
 # Single-player version in the window title.
 $window = Get-Content $windowPath -Raw
 if (-not $window.Contains('private const string BuildUiVersion')) {
     $window = $window.Replace(
         '    private readonly Plugin plugin;',
-        '    private const string BuildUiVersion = "SP1.3";' + [Environment]::NewLine + '    private readonly Plugin plugin;')
+        '    private const string BuildUiVersion = "SP1.4";' + [Environment]::NewLine + '    private readonly Plugin plugin;')
 }
 $window = $window.Replace(
     ': base("Doman Mahjong Solver###domanmahjong-main")',
