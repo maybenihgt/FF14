@@ -237,4 +237,4 @@ if (-not $window.Contains('    private void DrawLanPeerCard(Configuration cfg)')
 }
 Set-Content -Path $windowPath -Value $window -NoNewline
 
-Write-Host 'LAN peer discovery overlay applied. No app room code; same-subnet presence only; no game-state payload is defined.'
+Write-Host 'LAN peer discovery and opt-in public table-state sync overlays applied. Hidden hands and actions are not transmitted.'
