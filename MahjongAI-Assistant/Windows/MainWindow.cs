@@ -12,6 +12,10 @@ public sealed class MainWindow : Window, IDisposable
     private string result = "输入自己当前可见的 13 张或 14 张手牌，然后点击分析。";
     private string error = string.Empty;
     private int[]? parsedHand;
+    private string roomName = "Sandbox-" + Environment.MachineName;
+    private string roomSnapshot = "{\"source\":\"manual-sandbox-state\",\"hand\":[],\"discards\":[],\"scores\":[],\"turn\":0}";
+    private string roomStatus = "尚未连接私人沙盒房间。";
+    private bool roomBusy;
 
     public MainWindow(Plugin plugin) : base("Mahjong AI Assistant")
     {
@@ -30,6 +34,7 @@ public sealed class MainWindow : Window, IDisposable
         if (!ImGui.BeginTabBar("MahjongAIAssistantTabs")) return;
         if (ImGui.BeginTabItem("分析")) { DrawAnalyzer(); ImGui.EndTabItem(); }
         if (ImGui.BeginTabItem("账号")) { DrawAccounts(); ImGui.EndTabItem(); }
+        if (ImGui.BeginTabItem("沙盒房间")) { DrawTeamRoom(); ImGui.EndTabItem(); }
         if (ImGui.BeginTabItem("状态")) { DrawStatus(); ImGui.EndTabItem(); }
         if (ImGui.BeginTabItem("识别探针")) { DrawAddonProbe(); ImGui.EndTabItem(); }
         if (ImGui.BeginTabItem("说明")) { DrawNotes(); ImGui.EndTabItem(); }
@@ -97,6 +102,131 @@ public sealed class MainWindow : Window, IDisposable
         ImGui.Separator();
         ImGui.Text($"当前标签：{plugin.Configuration.AccountId}（{plugin.Configuration.AccountGroup}）");
         ImGui.TextDisabled("目前仅保存本机标签；尚未实现跨电脑同步。");
+    }
+
+
+    private void DrawTeamRoom()
+    {
+        ImGui.TextWrapped("仅用于四名自愿参与者的私人练习/测试。此页面只同步手动填写的数据，不读取实时牌局、不提供对局协同建议，也不会发送游戏操作。");
+        ImGui.Separator();
+        ImGui.Text("房间服务地址");
+        ImGui.SetNextItemWidth(-1);
+        var url = plugin.Configuration.TeamRoomUrl;
+        if (ImGui.InputText("##teamRoomUrl", ref url, 256))
+        {
+            plugin.Configuration.TeamRoomUrl = url;
+            plugin.Configuration.Save();
+        }
+        ImGui.Text("本地参与者名称");
+        ImGui.SetNextItemWidth(-1);
+        ImGui.InputText("##roomName", ref roomName, 64);
+        ImGui.Text("队伍");
+        if (ImGui.Button("A 队")) plugin.Configuration.TeamRoomTeam = "A";
+        ImGui.SameLine();
+        if (ImGui.Button("B 队")) plugin.Configuration.TeamRoomTeam = "B";
+        ImGui.SameLine();
+        ImGui.Text("当前选择：" + plugin.Configuration.TeamRoomTeam);
+
+        if (ImGui.Button(roomBusy ? "处理中..." : "创建私人沙盒房间") && !roomBusy)
+            _ = CreateSandboxRoomAsync();
+        ImGui.SameLine();
+        if (ImGui.Button(roomBusy ? "处理中..." : "加入已有房间") && !roomBusy)
+            _ = JoinSandboxRoomAsync();
+
+        ImGui.Separator();
+        ImGui.Text("房间 ID");
+        ImGui.SetNextItemWidth(-1);
+        var roomId = plugin.Configuration.TeamRoomId;
+        if (ImGui.InputText("##roomId", ref roomId, 128))
+        {
+            plugin.Configuration.TeamRoomId = roomId;
+            plugin.Configuration.Save();
+        }
+        ImGui.Text("邀请码（仅加入时需要）");
+        ImGui.SetNextItemWidth(-1);
+        var invite = plugin.Configuration.TeamRoomInviteCode;
+        if (ImGui.InputText("##roomInvite", ref invite, 128))
+        {
+            plugin.Configuration.TeamRoomInviteCode = invite;
+            plugin.Configuration.Save();
+        }
+        ImGui.TextDisabled("参与者 Token 已保存在本机插件配置中，不要分享或截图公开。");
+
+        if (ImGui.Button(roomBusy ? "处理中..." : "刷新房间状态") && !roomBusy)
+            _ = RefreshSandboxRoomAsync();
+        ImGui.TextWrapped(roomStatus);
+        ImGui.Separator();
+        ImGui.TextWrapped("手动提交自己的沙盒测试快照（JSON 对象）：");
+        ImGui.SetNextItemWidth(-1);
+        ImGui.InputText("##roomSnapshot", ref roomSnapshot, 4096);
+        if (ImGui.Button(roomBusy ? "处理中..." : "提交手动快照") && !roomBusy)
+            _ = SubmitSandboxSnapshotAsync();
+    }
+
+    private async Task CreateSandboxRoomAsync()
+    {
+        roomBusy = true;
+        try
+        {
+            using var client = new TeamRoomClient(plugin.Configuration.TeamRoomUrl);
+            using var response = await client.CreateAsync(roomName, plugin.Configuration.TeamRoomTeam);
+            var root = response.RootElement;
+            plugin.Configuration.TeamRoomId = root.GetProperty("room_id").GetString() ?? string.Empty;
+            plugin.Configuration.TeamRoomInviteCode = root.GetProperty("invite_code").GetString() ?? string.Empty;
+            plugin.Configuration.TeamRoomToken = root.GetProperty("participant_token").GetString() ?? string.Empty;
+            plugin.Configuration.Save();
+            roomStatus = "已创建 sandbox 房间。\n房间 ID：" + plugin.Configuration.TeamRoomId +
+                         "\n邀请码：" + plugin.Configuration.TeamRoomInviteCode +
+                         "\n请只分享给另外三位同意参与私人测试的人。";
+        }
+        catch (Exception ex) { roomStatus = "创建失败：" + ex.Message; }
+        finally { roomBusy = false; }
+    }
+
+    private async Task JoinSandboxRoomAsync()
+    {
+        roomBusy = true;
+        try
+        {
+            using var client = new TeamRoomClient(plugin.Configuration.TeamRoomUrl);
+            using var response = await client.JoinAsync(plugin.Configuration.TeamRoomId,
+                plugin.Configuration.TeamRoomInviteCode, roomName, plugin.Configuration.TeamRoomTeam);
+            plugin.Configuration.TeamRoomToken = response.RootElement.GetProperty("participant_token").GetString() ?? string.Empty;
+            plugin.Configuration.Save();
+            roomStatus = "已加入私人沙盒房间。\n队伍：" + plugin.Configuration.TeamRoomTeam;
+        }
+        catch (Exception ex) { roomStatus = "加入失败：" + ex.Message; }
+        finally { roomBusy = false; }
+    }
+
+    private async Task RefreshSandboxRoomAsync()
+    {
+        roomBusy = true;
+        try
+        {
+            using var client = new TeamRoomClient(plugin.Configuration.TeamRoomUrl);
+            using var response = await client.GetRoomAsync(plugin.Configuration.TeamRoomId, plugin.Configuration.TeamRoomToken);
+            roomStatus = response.RootElement.ToString();
+        }
+        catch (Exception ex) { roomStatus = "刷新失败：" + ex.Message; }
+        finally { roomBusy = false; }
+    }
+
+    private async Task SubmitSandboxSnapshotAsync()
+    {
+        roomBusy = true;
+        try
+        {
+            using var snapshot = System.Text.Json.JsonDocument.Parse(roomSnapshot);
+            if (snapshot.RootElement.ValueKind != System.Text.Json.JsonValueKind.Object)
+                throw new FormatException("快照必须是 JSON 对象。");
+            using var client = new TeamRoomClient(plugin.Configuration.TeamRoomUrl);
+            using var response = await client.SubmitSnapshotAsync(plugin.Configuration.TeamRoomId,
+                plugin.Configuration.TeamRoomToken, snapshot.RootElement);
+            roomStatus = "快照已提交：" + response.RootElement;
+        }
+        catch (Exception ex) { roomStatus = "提交失败：" + ex.Message; }
+        finally { roomBusy = false; }
     }
 
     private void DrawStatus()

@@ -1,0 +1,134 @@
+{
+  "name": "EmjCN-Candidate",
+  "addonName": "Emj",
+  "tileTextureBase": 76041,
+  "offsets": {
+    "selfScore": "0x0500",
+    "shimochaScore": "0x07E0",
+    "toimenScore": "0x0AC0",
+    "kamichaScore": "0x0DA0",
+    "selfDiscardCountByte": "0x04FE",
+    "shimochaDiscardCountByte": "0x07DE",
+    "toimenDiscardCountByte": "0x0ABE",
+    "kamichaDiscardCountByte": "0x0D9E",
+    "handArrayStart": "0x0DB8",
+    "doraIndicator": "0x0FD8"
+  },
+  "nodeIds": {
+    "callModalHost": 104,
+    "callModalShell": 3,
+    "meldContainer": 61,
+    "nextButton": 97,
+    "nextButtonCollision": 4,
+    "nextButtonEventParam": 7
+  },
+  "atkValues": {
+    "stateCode": 0,
+    "wallCount": 1,
+    "chiClaimedTile": 19,
+    "ponClaimScanLo": 16,
+    "ponClaimScanHi": 21,
+    "chiFallbackScanLimit": 30,
+    "buttonLabelScanLimit": 50
+  },
+  "stateCodes": {
+    "ourTurnDiscard": 30,
+    "callPrompt": 15,
+    "callPromptList": 28,
+    "selfDeclareList": 6,
+    "postDrawIdle": 5,
+    "chiVariantSelect": 25,
+    "handResult": 29
+  },
+  "limits": {
+    "handSize": 14,
+    "wallInitial": 70,
+    "scoreSanityMax": 200000,
+    "discardCountSanityMax": 40,
+    "maxAkadoraSlots": 3
+  },
+  "actionLabels": {
+    "pon": [
+      "碰",
+      "碰！",
+      "碰!",
+      "Pon",
+      "ポン",
+      "ポン!"
+    ],
+    "chi": [
+      "吃",
+      "吃！",
+      "吃!",
+      "Chi",
+      "チー",
+      "チー!"
+    ],
+    "kan": [
+      "杠",
+      "杠！",
+      "杠!",
+      "槓",
+      "槓！",
+      "Kan",
+      "カン",
+      "カン!"
+    ],
+    "ron": [
+      "荣和",
+      "荣和！",
+      "榮和",
+      "榮和！",
+      "胡",
+      "胡！",
+      "胡牌",
+      "胡牌！",
+      "和牌",
+      "和牌！",
+      "和了",
+      "Ron",
+      "ロン",
+      "ロン!!"
+    ],
+    "riichi": [
+      "立直",
+      "立直！",
+      "Riichi",
+      "リーチ",
+      "リーチ!!"
+    ],
+    "tsumo": [
+      "自摸",
+      "自摸！",
+      "自摸胡",
+      "摸和",
+      "胡",
+      "胡！",
+      "胡牌",
+      "胡牌！",
+      "和牌",
+      "和牌！",
+      "和了",
+      "Tsumo",
+      "ツモ",
+      "ツモ!!"
+    ],
+    "pass": [
+      "放弃",
+      "放弃！",
+      "放棄",
+      "过",
+      "過",
+      "取消",
+      "跳过",
+      "跳過",
+      "不吃",
+      "不碰",
+      "パス",
+      "Pass"
+    ]
+  },
+  "clientLanguages": [
+    "ChineseSimplified"
+  ]
+}

@@ -1,0 +1,533 @@
+name: Upstream Mahjong Reader Build
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [integration/upstream-auto-reader]
+
+permissions:
+  contents: read
+
+jobs:
+  build-upstream:
+    name: Build upstream reader (Windows)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout this integration repository
+        uses: actions/checkout@v4
+        with:
+          path: integration-repo
+
+      - name: Test consent-gated 2v2 analysis relay
+        working-directory: integration-repo
+        run: python -m unittest backend.test_team_room -v
+
+      - name: Checkout pinned upstream source
+        uses: actions/checkout@v4
+        with:
+          repository: AinaSnow/FFXIV-AutoMahjongSolver
+          ref: 6202b32fffa73b48f21050b884b96c55df5945f3
+          path: upstream
+
+      - name: Overlay unverified China-client candidate profile
+        shell: pwsh
+        run: |
+          Copy-Item integration-repo/integration/cn-candidate-layout.json upstream/data/layouts/cn-candidate.json
+
+      - name: Apply UU LAN four-account discovery and private hand sync
+        shell: pwsh
+        run: ./integration-repo/integration/lan-peer/Apply-LanPeerDiscovery.ps1
+
+      - name: Apply big-account quick-win and small-account tsumogiri strategy
+        shell: pwsh
+        run: ./integration-repo/integration/lan-peer/Apply-TeamPlayStrategy.ps1
+ 
+      - name: Read in-game Mahjong nameplate text for identity diagnostics
+        shell: pwsh
+        run: ./integration-repo/integration/lan-peer/Apply-NameplateDiagnostics.ps1
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.401'
+
+      - name: Install pinned Dalamud build
+        shell: pwsh
+        working-directory: upstream
+        run: ./tools/install-dalamud.ps1
+
+      - name: Install pinned capture runtime
+        shell: pwsh
+        working-directory: upstream
+        run: ./tools/install-deucalion.ps1
+
+      - name: Restore
+        working-directory: upstream
+        run: dotnet restore Mahjong.Plugin.Dalamud.sln --locked-mode
+
+      # The optional table-score probe uses an Emj FFXIVClientStructs namespace
+      # absent from the pinned SDK. Remove only its optional delegate hookup;
+      # keep the main addon reader and the source file untouched.
+      - name: Disable optional Emj table-score probe hookup
+        shell: pwsh
+        working-directory: upstream
+        run: |
+          $file = 'Mahjong.Plugin.Dalamud/Plugin.cs'
+          $source = Get-Content $file -Raw
+          $old = '            tableScores: EmjTableReader.ReadPoints);'
+          if (-not $source.Contains($old)) { throw 'Expected optional EmjTableReader hookup was not found.' }
+          $source = $source.Replace($old, '            tableScores: null);')
+          Set-Content -Path $file -Value $source -NoNewline
+          Remove-Item 'Mahjong.Plugin.Dalamud/GameState/EmjTableReader.cs' -Force
+
+      - name: Harden Mahjong call-prompt detection and safe fallback
+        shell: pwsh
+        working-directory: upstream
+        run: |
+          $variant = 'Mahjong.Plugin.Dalamud/GameState/Variants/BaseEmjVariant.cs'
+          $source = Get-Content $variant -Raw
+          $oldPrompt = '        if (isCallPromptState && callModalVisible)'
+          $newPrompt = '        bool atkHasCallLabel = atkValues.Count > 0 && ScanButtonLabels(atkValues, profile.AtkValues.ButtonLabelScanLimit).HasAnyAcceptOffer;' + "`n" + '        if (isCallPromptState && (callModalVisible || atkHasCallLabel))'
+          if (-not $source.Contains($oldPrompt)) { throw 'Call-prompt gate not found in BaseEmjVariant.cs' }
+          $source = $source.Replace($oldPrompt, $newPrompt)
+          $oldRows = '            if (listWidgetLabels is not null)'
+          $newRows = '            if (listWidgetLabels is { Count: > 0 })'
+          if (-not $source.Contains($oldRows)) { throw 'Call-list fallback gate not found in BaseEmjVariant.cs' }
+          $source = $source.Replace($oldRows, $newRows)
+          $oldLog = '        bool isPrompt = stateCode == profile.StateCodes.CallPrompt && (legal.Flags & promptFlags) != 0;'
+          $newLog = '        bool isPrompt = (stateCode == profile.StateCodes.CallPrompt || stateCode == profile.StateCodes.CallPromptList) && (legal.Flags & promptFlags) != 0;'
+          if (-not $source.Contains($oldLog)) { throw 'Call-prompt diagnostic gate not found in BaseEmjVariant.cs' }
+          $source = $source.Replace($oldLog, $newLog)
+          Set-Content -Path $variant -Value $source -NoNewline
+
+          $auto = 'Mahjong.Plugin.Dalamud/Actions/AutoPlayLoop.cs'
+          $source = Get-Content $auto -Raw
+          $pattern = '(?m)^            var fallback = forceSafePass\r?\n                \? ActionChoice\.Pass\("pass: no authoritative opponent discard"\)\r?\n                : plugin\.Aggregator\.Choose\(plugin\.MortalBridge\.NormalizeForLocalFallback\(snapshot\)\);'
+          $replacement = @"
+            if (forceSafePass)
+            {
+                // Do not click Pass when a live UI reaction is not corroborated by server state.
+                // Stop automation and leave the reaction window to the player.
+                hasMortalWait = false;
+                choice = ActionChoice.Pass("no authoritative opponent discard; manual reaction required");
+                LastActionDescription = "automation safety stop: opponent reaction lacks authoritative discard; manual click required";
+                log.Warning($"[AutoPlayLoop] {LastActionDescription}");
+                plugin.ConfigService.Update(c => c with { AutomationArmed = false, ContinuousCollection = false });
+                return false;
+            }
+            var fallback = plugin.Aggregator.Choose(plugin.MortalBridge.NormalizeForLocalFallback(snapshot));
+          "@
+          $updated = [regex]::Replace($source, $pattern, [System.Text.RegularExpressions.MatchEvaluator]{ param($m) $replacement }, 1)
+          if ($updated -eq $source) { throw 'Mortal safe-pass fallback pattern did not match AutoPlayLoop.cs' }
+          $source = $updated
+          Set-Content -Path $auto -Value $source -NoNewline
+
+      - name: Prefer visible legal win actions and classify localized win label
+        shell: pwsh
+        working-directory: upstream
+        run: |
+          $variant = 'Mahjong.Plugin.Dalamud/GameState/Variants/BaseEmjVariant.cs'
+          $source = Get-Content $variant -Raw
+          $oldScan = '        var labels = ScanButtonLabels(atkValues, scanLimit: profile.AtkValues.ButtonLabelScanLimit);'
+          $newScan = $oldScan + "`n" +
+            '        // Generic Chinese "胡/胡牌/和牌" labels are stored under Ron aliases.' + "`n" +
+            '        // A 3n+2 concealed hand is our draw and must classify that offer as Tsumo.' + "`n" +
+            '        if (hand.Count > 0 && hand.Count % 3 == 2 && labels.OffersRon)' + "`n" +
+            '        {' + "`n" +
+            '            labels.OffersRon = false;' + "`n" +
+            '            labels.OffersTsumo = true;' + "`n" +
+            '        }' + "`n" +
+            '        else if (hand.Count > 0 && hand.Count % 3 == 1)' + "`n" +
+            '            labels.OffersTsumo = false;'
+          if (-not $source.Contains($oldScan)) { throw 'Button-label scan insertion point not found.' }
+          $source = $source.Replace($oldScan, $newScan)
+
+          $methodMarker = '    private LegalActions BuildCallPromptLegalFromListItems('
+          $methodAt = $source.IndexOf($methodMarker)
+          if ($methodAt -lt 0) { throw 'BuildCallPromptLegalFromListItems method not found.' }
+          $tail = $source.Substring($methodAt)
+          $anchor = '        var pons = new List<MeldCandidate>();'
+          $insertAt = $tail.IndexOf($anchor)
+          if ($insertAt -lt 0) { throw 'Call-list candidate insertion point not found.' }
+          $insert = '        // Classify generic CN win labels ("胡/胡牌/和牌") using the concealed-hand shape.' + "`n" +
+            '        if (hand.Count > 0 && hand.Count % 3 == 2 && (flags & ActionFlags.Ron) != 0)' + "`n" +
+            '            flags = (flags & ~ActionFlags.Ron) | ActionFlags.Tsumo;' + "`n" +
+            '        else if (hand.Count > 0 && hand.Count % 3 == 1 && (flags & ActionFlags.Tsumo) != 0)' + "`n" +
+            '            flags = (flags & ~ActionFlags.Tsumo) | ActionFlags.Ron;' + "`n" + "`n"
+          $source = $source.Substring(0, $methodAt) + $tail.Insert($insertAt, $insert)
+          Set-Content -Path $variant -Value $source -NoNewline
+
+          $auto = 'Mahjong.Plugin.Dalamud/Actions/AutoPlayLoop.cs'
+          $source = Get-Content $auto -Raw
+          $methodWin = '    private bool TryChoose(StateSnapshot snapshot, out ActionChoice choice)'
+          $methodAt = $source.IndexOf($methodWin)
+          if ($methodAt -lt 0) { throw 'TryChoose method not found.' }
+          $prefix = $source.Substring(0, $methodAt)
+          $tail = $source.Substring($methodAt)
+          $anchorWin = '        if (plugin.MortalBridge.Enabled && !plugin.MortalBridge.CurrentHandQuarantined)'
+          $anchorAt = $tail.IndexOf($anchorWin)
+          if ($anchorAt -lt 0) { throw 'TryChoose Mortal fallback insertion point not found.' }
+          $forceWin = '        // The live game UI has already exposed a legal win action. Do not wait for Mortal.' + "`n" +
+            '        if (snapshot.Legal.Can(ActionFlags.Tsumo))' + "`n" +
+            '        {' + "`n" +
+            '            choice = ActionChoice.DeclareTsumo("game UI exposed a legal Tsumo action");' + "`n" +
+            '            hasMortalWait = false;' + "`n" +
+            '            plugin.Aggregator.PublishLocalExecution(snapshot, choice, "terminal-guard");' + "`n" +
+            '            return true;' + "`n" +
+            '        }' + "`n" +
+            '        if (snapshot.Legal.Can(ActionFlags.Ron))' + "`n" +
+            '        {' + "`n" +
+            '            choice = ActionChoice.DeclareRon("game UI exposed a legal Ron action");' + "`n" +
+            '            hasMortalWait = false;' + "`n" +
+            '            plugin.Aggregator.PublishLocalExecution(snapshot, choice, "terminal-guard");' + "`n" +
+            '            return true;' + "`n" +
+            '        }' + "`n" + "`n"
+          $tail = $tail.Insert($anchorAt, $forceWin)
+          $source = $prefix + $tail
+          Set-Content -Path $auto -Value $source -NoNewline
+
+      - name: Apply privacy-safe defaults and migrate existing settings
+        shell: pwsh
+        working-directory: upstream
+        run: |
+          $config = 'Mahjong.Plugin.Dalamud/Configuration.cs'
+          $source = Get-Content $config -Raw
+          $oldVersion = 'public const int CurrentSchemaVersion = 3;'
+          if (-not $source.Contains($oldVersion)) { throw 'Configuration schema version 3 marker not found.' }
+          $source = $source.Replace($oldVersion, 'public const int CurrentSchemaVersion = 4;')
+          $oldTraining = 'public bool RetainTrainingData { get; init; } = true;'
+          if (-not $source.Contains($oldTraining)) { throw 'Training data default marker not found.' }
+          $source = $source.Replace($oldTraining, 'public bool RetainTrainingData { get; init; } = false;')
+          Set-Content -Path $config -Value $source -NoNewline
+
+          $plugin = 'Mahjong.Plugin.Dalamud/Plugin.cs'
+          $source = Get-Content $plugin -Raw
+          $oldMigrator = '            new ConfigMigratorV2ToV3(),'
+          if (-not $source.Contains($oldMigrator)) { throw 'Config migrator registration marker not found.' }
+          $source = $source.Replace($oldMigrator, $oldMigrator + "`n" + '            new ConfigMigratorV3ToV4(),')
+          Set-Content -Path $plugin -Value $source -NoNewline
+
+          $migration = @'
+          using Mahjong.Plugin.Game;
+
+          namespace Mahjong.Plugin.Dalamud.Composition;
+
+          /// <summary>Disables optional packet, memory and training collection, and experimental search for the CN candidate build.</summary>
+          internal sealed class ConfigMigratorV3ToV4 : IConfigMigrator<Configuration>
+          {
+              public int FromVersion => 3;
+              public int ToVersion => 4;
+
+              public Configuration Migrate(Configuration input) => input with
+              {
+                  Version = ToVersion,
+                  DebugAutoPacketLogging = false,
+                  MemoryDumpsEnabled = false,
+                  RetainTrainingData = false,
+                  EnhancedStrategy = false,
+                  EnhancedShadowOnly = true,
+              };
+          }
+          '@
+          Set-Content -Path 'Mahjong.Plugin.Dalamud/Composition/ConfigMigratorV3ToV4.cs' -Value $migration
+
+      - name: Enable fully automatic dispatch for CN classic action prompts
+        shell: pwsh
+        working-directory: upstream
+        run: |
+          $variant = 'Mahjong.Plugin.Dalamud/GameState/Variants/BaseEmjVariant.cs'
+          $source = Get-Content $variant -Raw
+          $oldPon = @'
+                  if (labels.OffersPon)
+                  {
+                      flags |= ActionFlags.Pon;
+                      // Only accept the exact claimed tile published by the prompt. The
+                      // Mortal bridge can rebuild candidates from the network discard;
+                      // guessing from every pair in our hand can select the wrong call.
+                      AppendPonCandidateFromAtkValues(hand, counts, atkValues, pons);
+                  }
+          '@
+          $newPon = @'
+                  if (labels.OffersPon)
+                  {
+                      // A label can exist in the localized resource table even when the
+                      // action is not available. Only expose Pon when the live claim tile
+                      // and the concealed hand produce a concrete legal candidate.
+                      AppendPonCandidateFromAtkValues(hand, counts, atkValues, pons);
+                      if (pons.Count > 0)
+                          flags |= ActionFlags.Pon;
+                  }
+          '@
+          if (-not $source.Contains($oldPon)) { throw 'Pon candidate block not found.' }
+          $source = $source.Replace($oldPon, $newPon)
+
+          $oldKan = @'
+                  if (labels.OffersKan)
+                  {
+                      flags |= ActionFlags.MinKan;
+                      AppendKanCandidate(hand, counts, kans);
+                  }
+          '@
+          $newKan = @'
+                  if (labels.OffersKan)
+                  {
+                      AppendKanCandidate(hand, counts, kans);
+                      if (kans.Count > 0)
+                          flags |= ActionFlags.MinKan;
+                  }
+          '@
+          if (-not $source.Contains($oldKan)) { throw 'Kan candidate block not found.' }
+          $source = $source.Replace($oldKan, $newKan)
+
+          $oldChi = @'
+                  if (labels.OffersChi)
+                  {
+                      flags |= ActionFlags.Chi;
+                      AppendChiCandidate(hand, atkValues, chis);
+                  }
+          '@
+          $newChi = @'
+                  if (labels.OffersChi)
+                  {
+                      AppendChiCandidate(hand, atkValues, chis);
+                      if (chis.Count > 0)
+                          flags |= ActionFlags.Chi;
+                  }
+          '@
+          if (-not $source.Contains($oldChi)) { throw 'Chi candidate block not found.' }
+          $source = $source.Replace($oldChi, $newChi)
+          Set-Content -Path $variant -Value $source -NoNewline
+
+          $dispatcher = 'Mahjong.Plugin.Dalamud/Actions/InputDispatcher.cs'
+          $source = Get-Content $dispatcher -Raw
+          $oldVisible = @'
+              /// <summary>Revalidates that the actionable call/self-declare modal is still visible immediately before a delayed dispatch.</summary>
+              public unsafe bool IsCallPromptVisible()
+              {
+                  if (!addon.TryGet(out var unit, out _) || !unit->IsVisible)
+                      return false;
+                  return IsListWidgetPopupActive(unit);
+              }
+          '@
+          $newVisible = @'
+              private unsafe bool IsClassicButtonPromptActive(AtkUnitBase* unit)
+              {
+                  if (unit == null || !unit->IsVisible || ReadStateCode(unit) != CallPromptCode)
+                      return false;
+                  var host = unit->GetNodeById(CallModalHostNodeId);
+                  return host != null && host->IsVisible() && HasClassicButtonLabels(unit);
+              }
+
+              /// <summary>True for either native list prompts (state 6/28) or the CN classic button row (state 15).</summary>
+              public unsafe bool IsClassicCallPromptVisible()
+              {
+                  return addon.TryGet(out var unit, out _) && IsClassicButtonPromptActive(unit);
+              }
+
+              /// <summary>Revalidates that the actionable call/self-declare modal is still visible immediately before a delayed dispatch.</summary>
+              public unsafe bool IsCallPromptVisible()
+              {
+                  if (!addon.TryGet(out var unit, out _) || !unit->IsVisible)
+                      return false;
+                  return IsListWidgetPopupActive(unit) || IsClassicButtonPromptActive(unit);
+              }
+          '@
+          if (-not $source.Contains($oldVisible)) { throw 'IsCallPromptVisible block not found.' }
+          $source = $source.Replace($oldVisible, $newVisible)
+
+          $oldGate = @'
+                  if (!IsListWidgetPopupActive(unit))
+                  {
+                      LastDispatchPath = "call:prompt-not-visible";
+                      return DispatchResult.HookFailed;
+                  }
+          '@
+          $newGate = @'
+                  bool isListPrompt = IsListWidgetPopupActive(unit);
+                  bool isClassicPrompt = IsClassicButtonPromptActive(unit);
+                  if (!isListPrompt && !isClassicPrompt)
+                  {
+                      LastDispatchPath = "call:prompt-not-visible";
+                      return DispatchResult.HookFailed;
+                  }
+          '@
+          if (-not $source.Contains($oldGate)) { throw 'DispatchCallOption visibility gate not found.' }
+          $source = $source.Replace($oldGate, $newGate)
+
+          $oldResolve = @'
+                  if (action is { } requested && (!TryResolveLiveCallOption(requested, out int liveOption) || option != liveOption))
+                  {
+                      LastDispatchPath = "call:option-changed-or-unobserved";
+                      return DispatchResult.HookFailed;
+                  }
+          '@
+          $newResolve = @'
+                  if (action is { } requested)
+                  {
+                      if (isListPrompt)
+                      {
+                          if (!TryResolveLiveCallOption(requested, out int liveOption) || option != liveOption)
+                          {
+                              LastDispatchPath = "call:option-changed-or-unobserved";
+                              return DispatchResult.HookFailed;
+                          }
+                      }
+                      else if (!isClassicPrompt || option < 0)
+                      {
+                          LastDispatchPath = "call:classic-option-unverified";
+                          return DispatchResult.HookFailed;
+                      }
+                  }
+          '@
+          if (-not $source.Contains($oldResolve)) { throw 'Live call option validation block not found.' }
+          $source = $source.Replace($oldResolve, $newResolve)
+          Set-Content -Path $dispatcher -Value $source -NoNewline
+
+          $auto = 'Mahjong.Plugin.Dalamud/Actions/AutoPlayLoop.cs'
+          $source = Get-Content $auto -Raw
+          $oldRefresh = @'
+                  if (observed is not null
+                      && plugin.Dispatcher.IsCallPromptVisible()
+                      && !(kind == ActionKind.Ron && plugin.MortalBridge.HasExpiredReactionWindow(current))
+                      && TryResolveCallOption(decision, current, kind, out option)
+                      && plugin.Dispatcher.TryResolveLiveCallOption(kind, out option))
+                      return true;
+          '@
+          $newRefresh = @'
+                  bool resolvedDecisionOption = observed is not null
+                      && TryResolveCallOption(decision, current, kind, out option);
+                  bool liveOptionVerified = plugin.Dispatcher.IsClassicCallPromptVisible()
+                      || (plugin.Dispatcher.TryResolveLiveCallOption(kind, out int liveOption) && option == liveOption);
+                  if (observed is not null
+                      && plugin.Dispatcher.IsCallPromptVisible()
+                      && !(kind == ActionKind.Ron && plugin.MortalBridge.HasExpiredReactionWindow(current))
+                      && resolvedDecisionOption
+                      && liveOptionVerified)
+                      return true;
+          '@
+          if (-not $source.Contains($oldRefresh)) { throw 'TryRefreshCallDispatch validation block not found.' }
+          $source = $source.Replace($oldRefresh, $newRefresh)
+          Set-Content -Path $auto -Value $source -NoNewline
+
+      - name: Require manual opt-in for continuous auto-queue on every plugin load
+        shell: pwsh
+        working-directory: upstream
+        run: |
+          $plugin = 'Mahjong.Plugin.Dalamud/Plugin.cs'
+          $source = Get-Content $plugin -Raw
+          $old = '        migrated = migrated with { DevMode = false };'
+          $new = '        migrated = migrated with { DevMode = false, ContinuousCollection = false };'
+          if (-not $source.Contains($old)) { throw 'Plugin startup config reset marker not found.' }
+          $source = $source.Replace($old, $new)
+          Set-Content -Path $plugin -Value $source -NoNewline
+
+          $window = 'Mahjong.Plugin.Dalamud/UI/MainWindow.cs'
+          $source = Get-Content $window -Raw
+          $oldHint = 'Theme.Subtle(Loc.T($"Completed this load: {plugin.Collection.CompletedMatches}. No time limit; resumes after reload.", $"本次加载已完成：{plugin.Collection.CompletedMatches} 场。没有时间限制，重载后会继续。"));'
+          $newHint = 'Theme.Subtle(Loc.T($"Completed this load: {plugin.Collection.CompletedMatches}. Enable the checkbox to start; it will not auto-start after reload.", $"本次加载已完成：{plugin.Collection.CompletedMatches} 场。勾选后才开始排队；插件重载后不会自动开始。"));'
+          if (-not $source.Contains($oldHint)) { throw 'Continuous collection UI hint marker not found.' }
+          $source = $source.Replace($oldHint, $newHint)
+          Set-Content -Path $window -Value $source -NoNewline
+
+      - name: Remove unused packet, memory and training settings cards
+        shell: pwsh
+        working-directory: upstream
+        run: |
+          $window = 'Mahjong.Plugin.Dalamud/UI/SettingsWindow.cs'
+          $source = Get-Content $window -Raw
+          $ranges = @(
+            @('        using (Theme.BeginCard("settings-training-data"))', '        using (Theme.BeginCard("settings-mortal"))'),
+            @('        using (Theme.BeginCard("settings-packet-debug"))', '        using (Theme.BeginCard("settings-memdumps"))'),
+            @('        using (Theme.BeginCard("settings-memdumps"))', '        using (Theme.BeginCard("settings-appearance"))')
+          )
+          foreach ($range in $ranges) {
+              $start = $source.IndexOf($range[0])
+              $end = $source.IndexOf($range[1], $start + $range[0].Length)
+              if ($start -lt 0 -or $end -lt 0 -or $end -le $start) {
+                  throw "Could not find settings card range: $($range[0]) -> $($range[1])"
+              }
+              $source = $source.Remove($start, $end - $start)
+          }
+          Set-Content -Path $window -Value $source -NoNewline
+
+      - name: Correct tile overlay mapping and show call decisions
+        shell: pwsh
+        working-directory: upstream
+        run: |
+          $overlay = 'Mahjong.Plugin.Dalamud/UI/HandOverlay.cs'
+          $source = Get-Content $overlay -Raw
+          $pattern = '(?m)^(\s*)if \(n == null \|\| !n->IsVisible\(\)\)\r?\n\s*continue;'
+          $insert = @'
+          $1if (n == null || !n->IsVisible())
+          $1    continue;
+          $1// CN Emj dump: the concealed-hand tile components are children of hand row node 133.
+          $1// Filter to this exact subtree so discard rows, wall tiles and call tiles cannot shift the highlight.
+          $1if ((int)n->Type != 1055 || !HasAncestorId(n, 133u))
+          $1    continue;
+          '@
+          $updated = [regex]::Replace($source, $pattern, [System.Text.RegularExpressions.MatchEvaluator]{ param($m) $insert.Replace('$1', $m.Groups[1].Value) }, 1)
+          if ($updated -eq $source) { throw 'Hand overlay candidate filter regex did not match.' }
+          $source = $updated
+          Set-Content -Path $overlay -Value $source -NoNewline
+
+          $window = 'Mahjong.Plugin.Dalamud/UI/MainWindow.cs'
+          $source = Get-Content $window -Raw
+          $oldCaption = '        Theme.Caption(Loc.T("Best move", "最佳打法"));'
+          $newCaption = '        Theme.Caption(Loc.T("Best move / action", "最佳打牌 / 鸣牌动作"));'
+          if (-not $source.Contains($oldCaption)) { throw 'Main window suggestion caption not found.' }
+          $source = $source.Replace($oldCaption, $newCaption)
+
+          $patternGate = '(?s)        if \(!snap\.Legal\.Can\(ActionFlags\.Discard\)\)\r?\n        \{\r?\n            Theme\.Subtle\(Loc\.T\(\$"Waiting for your turn \(\{snap\.Hand\.Count\} tiles in hand\)\.", \$"等待轮到你（手牌 \{snap\.Hand\.Count\} 张）。"\)\);\r?\n            return;\r?\n        \}'
+          $newGate = @'
+                  const ActionFlags responseActions = ActionFlags.Pon | ActionFlags.Chi | ActionFlags.MinKan | ActionFlags.ShouMinKan | ActionFlags.AnKan | ActionFlags.Ron | ActionFlags.Riichi | ActionFlags.Tsumo;
+                  bool hasResponseAction = (snap.Legal.Flags & responseActions) != ActionFlags.None;
+                  if (!snap.Legal.Can(ActionFlags.Discard) && !hasResponseAction)
+                  {
+                      Theme.Subtle(Loc.T($"Waiting for your turn ({snap.Hand.Count} tiles in hand).", $"等待轮到你（手牌 {snap.Hand.Count} 张）。"));
+                      return;
+                  }
+          '@
+          $updated = [regex]::Replace($source, $patternGate, $newGate.TrimEnd(), 1)
+          if ($updated -eq $source) { throw 'Main window no-discard wait gate regex did not match.' }
+          $source = $updated
+          Set-Content -Path $window -Value $source -NoNewline
+
+      - name: Enable ranking-aware experimental strategy by default
+        shell: pwsh
+        working-directory: upstream
+        run: |
+          $path = 'Mahjong.Plugin.Dalamud/Configuration.cs'
+          $source = Get-Content $path -Raw
+          $source = $source.Replace('public bool EnhancedStrategy { get; init; } = false;', 'public bool EnhancedStrategy { get; init; } = true;')
+          $source = $source.Replace('public bool EnhancedShadowOnly { get; init; } = true;', 'public bool EnhancedShadowOnly { get; init; } = false;')
+          if ($source -notmatch 'EnhancedStrategy \{ get; init; \} = true;' -or $source -notmatch 'EnhancedShadowOnly \{ get; init; \} = false;') { throw 'Could not enable active enhanced strategy defaults.' }
+          Set-Content -Path $path -Value $source -NoNewline
+          Write-Host 'EnhancedStrategy=true; EnhancedShadowOnly=false; SearchBudgetMs remains 50.'
+      - name: Speed up small-account tsumogiri and avoid stale-revision stalls
+        shell: pwsh
+        run: ./integration-repo/integration/lan-peer/Apply-SmallAccountPacing.ps1
+
+      - name: Enable big-account aggressive Chi/Pon efficiency calls
+        shell: pwsh
+        run: ./integration-repo/integration/lan-peer/Apply-BigAccountAggressiveCalls.ps1
+
+      - name: Build plugin
+        working-directory: upstream
+        run: dotnet build Mahjong.Plugin.Dalamud/Mahjong.Plugin.Dalamud.csproj --configuration Release --no-restore
+
+      - name: Upload plugin package
+        uses: actions/upload-artifact@v4
+        with:
+          name: DomanMahjongSolver-China-Candidate
+          path: upstream/Mahjong.Plugin.Dalamud/bin/Release/Mahjong.Plugin.Dalamud/latest.zip
+          if-no-files-found: error
+
+      - name: Upload corresponding source and integration notes
+        uses: actions/upload-artifact@v4
+        with:
+          name: DomanMahjongSolver-Corresponding-Source
+          path: |
+            upstream/
+            integration-repo/integration/
+          if-no-files-found: warn
+          retention-days: 30
