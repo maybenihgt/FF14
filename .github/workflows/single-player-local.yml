@@ -3,7 +3,7 @@ name: Single-player Mahjong Local Plugin Build
 on:
   workflow_dispatch:
   push:
-    branches: [integration/single-player-count-limit]
+    branches: [integration/single-player-count-limit, fix/auto-discard-diagnostics]
 
 permissions:
   contents: read
@@ -494,6 +494,10 @@ jobs:
       - name: Apply single-player controls and full-match limit
         shell: pwsh
         run: ./integration-repo/integration/Apply-SinglePlayerFeatures.ps1
+
+      - name: Apply automatic discard diagnostics
+        shell: pwsh
+        run: ./integration-repo/integration/Apply-AutoDiscardDiagnostics.ps1
 
       - name: Build plugin
         shell: pwsh
