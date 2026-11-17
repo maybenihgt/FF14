@@ -4,6 +4,8 @@ $sourceFile = 'integration-repo/integration/lan-peer/LanPeerDiscovery.cs'
 $destinationDir = 'upstream/Mahjong.Plugin.Dalamud/Networking'
 New-Item -ItemType Directory -Force -Path $destinationDir | Out-Null
 Copy-Item $sourceFile (Join-Path $destinationDir 'LanPeerDiscovery.cs') -Force
+$publicSyncSource = 'integration-repo/integration/lan-peer/PublicTableStateSync.cs'
+Copy-Item $publicSyncSource (Join-Path $destinationDir 'PublicTableStateSync.cs') -Force
 
 $configPath = 'upstream/Mahjong.Plugin.Dalamud/Configuration.cs'
 $config = Get-Content $configPath -Raw
@@ -13,6 +15,9 @@ $configAdd = @'
 
     /// <summary>Local account role. Defaults to small; only explicit selection marks this client as a big account.</summary>
     public string LanPeerAccountType { get; init; } = "小号";
+
+    /// <summary>Opt-in transmission of visible public table data only; concealed hands and legal actions are never sent.</summary>
+    public bool PublicStateSyncEnabled { get; init; } = false;
 
 '@
 if (-not $config.Contains($configMarker)) { throw 'Configuration insertion marker not found.' }
@@ -33,6 +38,10 @@ if (-not $plugin.Contains('public LanPeerDiscovery LanPeers { get; }')) {
     if (-not $plugin.Contains($propertyMarker)) { throw 'Plugin property insertion marker not found.' }
     $plugin = $plugin.Replace($propertyMarker, $propertyMarker + [Environment]::NewLine + '    public LanPeerDiscovery LanPeers { get; }')
 }
+if (-not $plugin.Contains('public PublicTableStateSync PublicTableSync { get; }')) {
+    $plugin = $plugin.Replace('    public LanPeerDiscovery LanPeers { get; }',
+        '    public LanPeerDiscovery LanPeers { get; }' + [Environment]::NewLine + '    public PublicTableStateSync PublicTableSync { get; }')
+}
 $configServiceMarker = '        ConfigService = Services.GetRequiredService<IConfigService<Configuration>>();'
 $createPeers = @'
         LanPeers = new LanPeerDiscovery(
@@ -43,10 +52,22 @@ if (-not $plugin.Contains('LanPeers = new LanPeerDiscovery(')) {
     if (-not $plugin.Contains($configServiceMarker)) { throw 'Plugin service initialization marker not found.' }
     $plugin = $plugin.Replace($configServiceMarker, $configServiceMarker + [Environment]::NewLine + $createPeers.TrimEnd())
 }
+$aggregatorMarker = '        Aggregator = new StateAggregator(AddonReader, Framework, Policy, PublicState.Merge, () => Configuration);'
+$syncCreate = @'
+        PublicTableSync = new PublicTableStateSync(
+            LanPeers.InstanceId,
+            () => LanPeers.AccountType,
+            () => Configuration.LanPeerDiscoveryEnabled && Configuration.PublicStateSyncEnabled,
+            () => Aggregator.Latest);
+'@
+if (-not $plugin.Contains('PublicTableSync = new PublicTableStateSync(')) {
+    if (-not $plugin.Contains($aggregatorMarker)) { throw 'Aggregator initialization marker not found.' }
+    $plugin = $plugin.Replace($aggregatorMarker, $aggregatorMarker + [Environment]::NewLine + $syncCreate.TrimEnd())
+}
 $disposeMarker = '        PluginInterface.LanguageChanged -= Loc.SetLanguage;'
 if (-not $plugin.Contains('        LanPeers.Dispose();')) {
     if (-not $plugin.Contains($disposeMarker)) { throw 'Plugin dispose marker not found.' }
-    $plugin = $plugin.Replace($disposeMarker, $disposeMarker + [Environment]::NewLine + '        LanPeers.Dispose();')
+    $plugin = $plugin.Replace($disposeMarker, $disposeMarker + [Environment]::NewLine + '        PublicTableSync.Dispose();' + [Environment]::NewLine + '        LanPeers.Dispose();')
 }
 Set-Content -Path $pluginPath -Value $plugin -NoNewline
 
@@ -160,6 +181,42 @@ $method = @'
                     $"There are {roster.Count - 4} additional plugin instances on this visible subnet; only four are shown in this table list.",
                     $"当前可见子网还有 {roster.Count - 4} 个额外插件实例；四人桌列表只显示前四个。"));
 
+            ImGui.Separator();
+            Theme.SectionHeader(Loc.T("Public table-state sync", "公共牌局状态同步"));
+            bool syncEnabled = cfg.PublicStateSyncEnabled;
+            if (ImGui.Checkbox(Loc.T("Share visible table state with this LAN", "向局域网同步公开牌局状态") + "##public-state-sync", ref syncEnabled))
+                plugin.ConfigService.Update(c => c with { PublicStateSyncEnabled = syncEnabled });
+            Theme.Subtle(Loc.T(
+                "Only public information is sent: scores, visible discards, melds, riichi markers, dora indicators, round and wall count. Your concealed hand, draw, legal actions, recommendations and ura-dora are never transmitted.",
+                "只发送公开信息：分数、可见牌河、副露、立直标记、宝牌指示牌、局况和剩余牌墙。绝不发送本机暗手牌、摸牌信息、合法操作、AI 推荐或里宝牌。"));
+
+            if (!enabled && syncEnabled)
+                Theme.Subtle(Loc.T("Enable node discovery first; public-state sync stays paused until then.", "请先开启节点发现；在此之前公共状态同步不会运行。"));
+
+            var localSnapshot = plugin.Aggregator.Latest;
+            if (localSnapshot is null)
+                Theme.Subtle(Loc.T("Local table state: waiting for a table.", "本机牌局状态：等待进入牌桌。"));
+            else if (!localSnapshot.PublicStateConsistent)
+                Theme.Subtle(Loc.T("Local public state is not verified yet; it will not be broadcast.", "本机公共状态尚未通过一致性校验，不会广播。"));
+            else
+                Theme.Subtle(Loc.T("Local public state: available.", "本机公共状态：可用。"));
+
+            var sharedStates = plugin.PublicTableSync.RemoteStates;
+            Theme.Subtle(Loc.T($"Remote public states received: {sharedStates.Count}", $"已收到其他客户端公共状态：{sharedStates.Count}"));
+            foreach (var state in sharedStates)
+            {
+                string wind = state.RoundWind switch { 0 => "东", 1 => "南", 2 => "西", 3 => "北", _ => "?" };
+                string scoreText = string.Join("/", state.Scores);
+                string riverText = string.Join("/", state.DiscardCounts);
+                ImGui.BulletText($"{state.AccountType} | {state.Address} | {wind}{state.Kyoku}局 | 剩余牌墙 {state.WallRemaining} | 河 {riverText} | 点数 {scoreText}");
+            }
+
+            if (!string.IsNullOrWhiteSpace(plugin.PublicTableSync.LastError))
+                Theme.Subtle(plugin.PublicTableSync.LastError);
+            Theme.Subtle(Loc.T(
+                "Public-state packets use UDP 47722. Enable this option on every PC. This is a public-board mirror, not hidden-hand sharing or a decision relay.",
+                "公共状态使用 UDP 47722。需要在每台电脑上分别开启。本功能只镜像公开牌面，不共享暗手牌，也不转发决策。"));
+
             if (!string.IsNullOrWhiteSpace(plugin.LanPeers.LastError))
                 Theme.Subtle(plugin.LanPeers.LastError);
 
@@ -168,8 +225,8 @@ $method = @'
                 "Discovery uses the local IPv4 subnet and UDP 47721. Other plugin users on the same subnet may also be detected; the list is not an authoritative UU room-member list.",
                 "节点发现基于本机可见 IPv4 子网和 UDP 47721。同一子网的其他插件用户也可能被发现；列表并不是 UU 房间成员的权威名单。"));
             Theme.Subtle(Loc.T(
-                "Important: this is the four-client presence roster only. The actual Mahjong match is still run inside FFXIV; this build does not synchronize live hands, discards, scores or actions between clients.",
-                "注意：这里目前是四客户端在线名单。真正的麻将对局仍由 FF14 游戏内运行；本版本还不会跨客户端同步实时手牌、牌河、分数或操作。"));
+                "Important: public table-state sync shares visible board data only. Concealed hands, legal actions and recommendations stay local to each client.",
+                "注意：公共牌局同步只共享公开牌面。各客户端的暗手牌、合法操作和 AI 推荐仍只保留在本机。"));
         }
     }
 
