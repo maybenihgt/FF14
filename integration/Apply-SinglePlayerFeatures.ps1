@@ -395,12 +395,34 @@ if (-not $auto.Contains('private bool TryChooseTsumogiri(')) {
 }
 Set-Content -Path $autoPath -Value $auto -NoNewline
 
+# Route our own legal discard turn through the discard scheduler even when
+# state-6 exposes self-declare/call-related flags at the same time.
+$autoPath = 'upstream/Mahjong.Plugin.Dalamud/Actions/AutoPlayLoop.cs'
+$auto = Get-Content $autoPath -Raw
+$oldRoute = @'
+        if (isCallPrompt)
+            ScheduleCallDecision(context);
+        else
+            ScheduleDiscard(context);
+'@
+$newRoute = @'
+        // A self-discard surface (notably state 6) may expose discard plus self-declare flags.
+        // Only route to the opponent-call scheduler when discard is not currently legal.
+        if (isCallPrompt && !isDiscardTurn)
+            ScheduleCallDecision(context);
+        else
+            ScheduleDiscard(context);
+'@
+if ($auto.Contains($oldRoute)) { $auto = $auto.Replace($oldRoute, $newRoute) }
+elseif (-not $auto.Contains('if (isCallPrompt && !isDiscardTurn)')) { throw 'Auto-play call/discard route anchor not found.' }
+Set-Content -Path $autoPath -Value $auto -NoNewline
+
 # Single-player version in the window title.
 $window = Get-Content $windowPath -Raw
 if (-not $window.Contains('private const string BuildUiVersion')) {
     $window = $window.Replace(
         '    private readonly Plugin plugin;',
-        '    private const string BuildUiVersion = "SP1.0";' + [Environment]::NewLine + '    private readonly Plugin plugin;')
+        '    private const string BuildUiVersion = "SP1.1";' + [Environment]::NewLine + '    private readonly Plugin plugin;')
 }
 $window = $window.Replace(
     ': base("Doman Mahjong Solver###domanmahjong-main")',
