@@ -636,19 +636,12 @@ if ($auto.Contains('tsumogiri mode: decline calls and wait for own draw'))
 Set-Content -Path $autoPath -Value $auto -NoNewline
 
 
-# Pure tsumogiri mode: never accept Ron/Tsumo and never make open calls.
-# All reaction prompts are passed; own legal discard turns still use the drawn-tile path.
+# Tsumogiri is a strict feeder policy: never accept calls or wins.
+# Route every prompt category independently; own draw turns only discard slot 13.
 $autoPath = 'upstream/Mahjong.Plugin.Dalamud/Actions/AutoPlayLoop.cs'
 $auto = Get-Content $autoPath -Raw
 
-$auto = $auto.Replace(
-    'if (!IsAutomationArmed() || plugin.PublicState.AwaitingNextHand)',
-    'if (!IsAutomationArmed() || plugin.PublicState.AwaitingNextHand || plugin.Configuration.AutoPlayMode == AutoPlayMode.Tsumogiri)')
-
-$auto = $auto.Replace(
-    'if (isTerminalWinConfirmation)',
-    'if (isTerminalWinConfirmation && plugin.Configuration.AutoPlayMode != AutoPlayMode.Tsumogiri)')
-
+# Call prompts (Chi/Pon/Kan/Ron/Tsumo): explicitly Pass, never ask Mortal or local AI.
 $oldCallChoice = @'
             if (!TryChoose(snap, out var choice))
             {
@@ -664,11 +657,11 @@ $newCallChoice = @'
                 hasMortalWait = false;
                 if (!snap.Legal.Can(ActionFlags.Pass))
                 {
-                    LastActionDescription = "pure tsumogiri: no pass action available; refusing all calls and wins";
+                    LastActionDescription = "tsumogiri paused: call prompt has no legal Pass";
                     fsm.ClearContext();
                     return;
                 }
-                choice = ActionChoice.Pass("pure tsumogiri mode: pass every call and win opportunity");
+                choice = ActionChoice.Pass("strict tsumogiri: pass every call and win prompt");
             }
             else if (!TryChoose(snap, out choice))
             {
@@ -678,12 +671,17 @@ $newCallChoice = @'
             }
 '@
 if ($auto.Contains($oldCallChoice)) { $auto = $auto.Replace($oldCallChoice, $newCallChoice) }
-elseif (-not $auto.Contains('pure tsumogiri mode: pass every call and win opportunity')) {
-    throw 'Call decision pass-policy anchor not found.'
+elseif (-not $auto.Contains('strict tsumogiri: pass every call and win prompt')) {
+    throw 'ScheduleCallDecision choice anchor not found.'
 }
 
-# If a terminal win appears outside the regular call-prompt route, pass it too.
-$oldTerminalChoice = @'
+# Draw-turn path: if a win label is surfaced here (including the transient
+# self-draw confirmation route), pass it. Otherwise discard the actual drawn tile.
+$discardStart = $auto.IndexOf('    private void ScheduleDiscard(DispatchContext context)')
+$discardEnd = $auto.IndexOf('    /// <summary>On HookFailed', $discardStart)
+if ($discardStart -lt 0 -or $discardEnd -lt 0) { throw 'ScheduleDiscard method boundaries not found.' }
+$discardBlock = $auto.Substring($discardStart, $discardEnd - $discardStart)
+$oldDiscardChoice = @'
             if (!TryChoose(snap, out var choice))
             {
                 LastActionDescription = "waiting for Mortal discard";
@@ -691,16 +689,22 @@ $oldTerminalChoice = @'
                 return;
             }
 '@
-$newTerminalChoice = @'
+$newDiscardChoice = @'
+            bool feederMode = plugin.Configuration.AutoPlayMode == AutoPlayMode.Tsumogiri;
             ActionChoice choice;
-            bool forceTsumogiri = plugin.Configuration.AutoPlayMode == AutoPlayMode.Tsumogiri;
-            bool passWin = forceTsumogiri && isTerminalWin && !snap.Legal.Can(ActionFlags.Discard)
-                && snap.Legal.Can(ActionFlags.Pass);
-            bool drawnIsRed = false;
             int drawnSlot = -1;
-            if (passWin)
-                choice = ActionChoice.Pass("pure tsumogiri mode: pass terminal win");
-            else if (forceTsumogiri && snap.Legal.Can(ActionFlags.Discard))
+            bool drawnIsRed = false;
+            if (feederMode && isTerminalWin)
+            {
+                if (!snap.Legal.Can(ActionFlags.Pass))
+                {
+                    LastActionDescription = "tsumogiri paused: terminal win prompt has no legal Pass";
+                    fsm.ClearContext();
+                    return;
+                }
+                choice = ActionChoice.Pass("strict tsumogiri: decline Ron/Tsumo");
+            }
+            else if (feederMode)
             {
                 if (!TryChooseTsumogiri(snap, out choice, out drawnSlot, out drawnIsRed, out string tsumogiriError))
                 {
@@ -710,34 +714,27 @@ $newTerminalChoice = @'
                     return;
                 }
             }
-            else if (!forceTsumogiri && !TryChoose(snap, out choice))
+            else if (!TryChoose(snap, out choice))
             {
                 LastActionDescription = "waiting for Mortal discard";
                 fsm.ClearContext();
                 return;
             }
-            else if (forceTsumogiri)
-            {
-                LastActionDescription = "pure tsumogiri: no legal draw discard or pass action";
-                fsm.ClearContext();
-                return;
-            }
 '@
-if ($auto.Contains($oldTerminalChoice)) { $auto = $auto.Replace($oldTerminalChoice, $newTerminalChoice) }
-elseif (-not $auto.Contains('bool passWin = forceTsumogiri && isTerminalWin')) {
-    throw 'Terminal win/discard policy anchor not found.'
+if ($discardBlock.Contains($oldDiscardChoice)) { $discardBlock = $discardBlock.Replace($oldDiscardChoice, $newDiscardChoice) }
+elseif (-not $discardBlock.Contains('strict tsumogiri: decline Ron/Tsumo')) {
+    throw 'ScheduleDiscard choice anchor not found.'
 }
-
-$oldDispatchChoice = @'
+$oldDispatch = @'
             if (isTerminalWin)
                 DispatchCallChoice(snap, choice);
             else
                 DispatchPolicyChoice(snap, choice);
 '@
-$newDispatchChoice = @'
-            if (passWin || (isTerminalWin && choice.Kind == ActionKind.Pass))
+$newDispatch = @'
+            if (isTerminalWin)
                 DispatchCallChoice(snap, choice);
-            else if (forceTsumogiri)
+            else if (feederMode)
             {
                 var result = plugin.Dispatcher.DispatchDiscard(drawnSlot);
                 LastActionDescription = $"auto-tsumogiri {choice.DiscardTile} slot={drawnSlot} → {result}";
@@ -747,16 +744,54 @@ $newDispatchChoice = @'
                     snap: snap, isRed: drawnIsRed);
                 ClearRetryDebounceIfHookFailed(result);
             }
-            else if (isTerminalWin)
-                DispatchCallChoice(snap, choice);
             else
                 DispatchPolicyChoice(snap, choice);
 '@
-if ($auto.Contains($oldDispatchChoice)) { $auto = $auto.Replace($oldDispatchChoice, $newDispatchChoice) }
-elseif (-not $auto.Contains('if (passWin || (isTerminalWin && choice.Kind == ActionKind.Pass))')) {
-    throw 'Terminal win dispatch anchor not found.'
+if ($discardBlock.Contains($oldDispatch)) { $discardBlock = $discardBlock.Replace($oldDispatch, $newDispatch) }
+elseif (-not $discardBlock.Contains('auto-tsumogiri {choice.DiscardTile}')) {
+    throw 'ScheduleDiscard dispatch anchor not found.'
 }
+$auto = $auto.Substring(0, $discardStart) + $discardBlock + $auto.Substring($discardEnd)
+
+# Terminal win confirmation is a separate delayed route; never declare the win
+# in feeder mode. Send Pass only while the same live prompt remains visible.
+$oldTerminalMethod = @'
+            var choice = kind == ActionKind.Ron
+                ? ActionChoice.DeclareRon("terminal win confirmation")
+                : ActionChoice.DeclareTsumo("terminal win confirmation");
+            EmitDecisionFinding("terminal-win-confirm", snap, choice);
+            DispatchCallChoice(snap, choice);
+'@
+$newTerminalMethod = @'
+            if (plugin.Configuration.AutoPlayMode == AutoPlayMode.Tsumogiri)
+            {
+                if (!snap.Legal.Can(ActionFlags.Pass))
+                {
+                    terminalWinConfirmation.Reset();
+                    LastActionDescription = "tsumogiri paused: terminal confirmation has no legal Pass";
+                    fsm.ClearContext();
+                    return;
+                }
+                var pass = ActionChoice.Pass("strict tsumogiri: decline terminal win confirmation");
+                EmitDecisionFinding("terminal-win-pass", snap, pass);
+                DispatchCallChoice(snap, pass);
+                terminalWinConfirmation.Reset();
+                return;
+            }
+
+            var choice = kind == ActionKind.Ron
+                ? ActionChoice.DeclareRon("terminal win confirmation")
+                : ActionChoice.DeclareTsumo("terminal win confirmation");
+            EmitDecisionFinding("terminal-win-confirm", snap, choice);
+            DispatchCallChoice(snap, choice);
+'@
+if ($auto.Contains($oldTerminalMethod)) { $auto = $auto.Replace($oldTerminalMethod, $newTerminalMethod) }
+elseif (-not $auto.Contains('strict tsumogiri: decline terminal win confirmation')) {
+    throw 'ScheduleTerminalWinConfirmation choice anchor not found.'
+}
+
 Set-Content -Path $autoPath -Value $auto -NoNewline
+
 
 # Single-player version in the window title.
 $window = Get-Content $windowPath -Raw
