@@ -6,8 +6,8 @@ New-Item -ItemType Directory -Force -Path $destinationDir | Out-Null
 Copy-Item $sourceFile (Join-Path $destinationDir 'LanPeerDiscovery.cs') -Force
 $publicSyncSource = 'integration-repo/integration/lan-peer/PublicTableStateSync.cs'
 Copy-Item $publicSyncSource (Join-Path $destinationDir 'PublicTableStateSync.cs') -Force
-$handSyncSource = 'integration-repo/integration/lan-peer/ConsentedHandSync.cs'
-Copy-Item $handSyncSource (Join-Path $destinationDir 'ConsentedHandSync.cs') -Force
+$handSyncSource = 'integration-repo/integration/lan-peer/FourPlayerHandSync.cs'
+Copy-Item $handSyncSource (Join-Path $destinationDir 'FourPlayerHandSync.cs') -Force
 
 $configPath = 'upstream/Mahjong.Plugin.Dalamud/Configuration.cs'
 $config = Get-Content $configPath -Raw
@@ -20,9 +20,6 @@ $configAdd = @'
 
     /// <summary>Opt-in transmission of visible public table data only; concealed hands and legal actions are never sent.</summary>
     public bool PublicStateSyncEnabled { get; init; } = false;
-
-    /// <summary>Explicit opt-in to share this client's concealed hand with exactly four consenting LAN clients.</summary>
-    public bool ConcealedHandShareConsent { get; init; } = false;
 
 '@
 if (-not $config.Contains($configMarker)) { throw 'Configuration insertion marker not found.' }
@@ -47,34 +44,27 @@ if (-not $plugin.Contains('public PublicTableStateSync PublicTableSync { get; }'
     $plugin = $plugin.Replace('    public LanPeerDiscovery LanPeers { get; }',
         '    public LanPeerDiscovery LanPeers { get; }' + [Environment]::NewLine + '    public PublicTableStateSync PublicTableSync { get; }')
 }
-if (-not $plugin.Contains('public ConsentedHandSync HandSync { get; }')) {
+if (-not $plugin.Contains('public FourPlayerHandSync HandSync { get; }')) {
     $plugin = $plugin.Replace('    public PublicTableStateSync PublicTableSync { get; }',
         '    public PublicTableStateSync PublicTableSync { get; }' + [Environment]::NewLine + '    public ConsentedHandSync HandSync { get; }')
 }
-$configServiceMarker = '        ConfigService = Services.GetRequiredService<IConfigService<Configuration>>();'
-$createPeers = @'
+$aggregatorMarker = '        Aggregator = new StateAggregator(AddonReader, Framework, Policy, PublicState.Merge, () => Configuration);'
+$syncCreate = @'
         LanPeers = new LanPeerDiscovery(
             () => Configuration.LanPeerDiscoveryEnabled,
             () => Configuration.LanPeerAccountType,
-            () => Configuration.ConcealedHandShareConsent);
-'@
-if (-not $plugin.Contains('LanPeers = new LanPeerDiscovery(')) {
-    if (-not $plugin.Contains($configServiceMarker)) { throw 'Plugin service initialization marker not found.' }
-    $plugin = $plugin.Replace($configServiceMarker, $configServiceMarker + [Environment]::NewLine + $createPeers.TrimEnd())
-}
-$aggregatorMarker = '        Aggregator = new StateAggregator(AddonReader, Framework, Policy, PublicState.Merge, () => Configuration);'
-$syncCreate = @'
+            () => Aggregator.Latest);
         PublicTableSync = new PublicTableStateSync(
             LanPeers.InstanceId,
             () => LanPeers.AccountType,
             () => Configuration.LanPeerDiscoveryEnabled && Configuration.PublicStateSyncEnabled,
             () => Aggregator.Latest);
-        HandSync = new ConsentedHandSync(
+        HandSync = new FourPlayerHandSync(
             LanPeers,
-            () => Configuration.LanPeerDiscoveryEnabled && Configuration.ConcealedHandShareConsent,
+            () => Configuration.LanPeerDiscoveryEnabled,
             () => Aggregator.Latest);
 '@
-if (-not $plugin.Contains('PublicTableSync = new PublicTableStateSync(')) {
+if (-not $plugin.Contains('LanPeers = new LanPeerDiscovery(')) {
     if (-not $plugin.Contains($aggregatorMarker)) { throw 'Aggregator initialization marker not found.' }
     $plugin = $plugin.Replace($aggregatorMarker, $aggregatorMarker + [Environment]::NewLine + $syncCreate.TrimEnd())
 }
@@ -148,29 +138,22 @@ $method = @'
             if (ImGui.RadioButton(Loc.T("Big account", "大号") + "##lan-peer-big", isBig))
                 plugin.ConfigService.Update(c => c with { LanPeerAccountType = "大号" });
             ImGui.Separator();
-            bool shareOwnHand = cfg.ConcealedHandShareConsent;
-            if (ImGui.Checkbox(Loc.T("I agree to share my hand with this private four-player table", "我同意向这张私人四人桌共享本机手牌") + "##hand-share-consent", ref shareOwnHand))
-                plugin.ConfigService.Update(c => c with { ConcealedHandShareConsent = shareOwnHand });
-            Theme.Subtle(Loc.T(
-                "Hand sharing starts only when exactly four plugin clients are online and all four have checked this box. Untick it or leave the table to stop sharing.",
-                "只有恰好四个插件客户端在线且四人全部勾选后，才会开始共享手牌。取消勾选或离开牌桌会停止共享。"));
-            Theme.Subtle(Loc.T(
-                $"Explicit hand-sharing consent: {plugin.HandSync.ConsentedCount}/4",
-                $"明确同意共享手牌：{plugin.HandSync.ConsentedCount}/4"));
-            if (plugin.HandSync.AllFourConsented)
-                Theme.Subtle(Loc.T("All four consented. Waiting for matching, verified hand snapshots…", "四人均已同意，正在等待四份匹配且通过校验的手牌快照……"));
+            if (plugin.HandSync.IsPrivateFourAccountTable)
+                Theme.Subtle(Loc.T("Private 2-big / 2-small table verified. Hands are shared automatically.",
+                    "已识别 2 大号 + 2 小号的四账号同桌，正在自动共享四家手牌。"));
             else
-                Theme.Subtle(Loc.T("Concealed hands are not being transmitted.", "当前不会传输任何暗手牌。"));
+                Theme.Subtle(Loc.T("Private four-account table not verified. Hand sharing is off; outsider-safe strategy is active.",
+                    "尚未确认四个自有账号同桌，手牌共享关闭，已切换为有外人时的策略。"));
 
             var remoteHands = plugin.HandSync.RemoteHands;
-            if (plugin.HandSync.AllFourConsented)
+            if (plugin.HandSync.IsPrivateFourAccountTable)
             {
-                var localSnapshot = plugin.Aggregator.Latest;
-                if (localSnapshot is not null && localSnapshot.Hand.Count is 13 or 14)
+                var handSnapshot = plugin.Aggregator.Latest;
+                if (handSnapshot is not null && handSnapshot.Hand.Count is 13 or 14)
                 {
-                    string localTiles = string.Join(" ", localSnapshot.Hand.Select((tile, index) =>
-                        tile.ShortName + (index < localSnapshot.HandIsRed.Count && localSnapshot.HandIsRed[index] ? "*" : "")));
-                    ImGui.TextWrapped($"本机 {cfg.LanPeerAccountType} | 手牌：{localTiles}");
+                    string localTiles = string.Join(" ", handSnapshot.Hand.Select((tile, index) =>
+                        tile.ShortName + (index < handSnapshot.HandIsRed.Count && handSnapshot.HandIsRed[index] ? "*" : "")));
+                    ImGui.TextWrapped($"本机 {cfg.LanPeerAccountType} / 大号序号 {plugin.LanPeers.BigAccountOrdinal} | 手牌：{localTiles}");
                 }
                 foreach (var sharedHand in remoteHands)
                 {
@@ -187,15 +170,15 @@ $method = @'
             else
             {
                 Theme.Subtle(Loc.T(
-                    "All four clients must be present and individually opt in before any hand packet is sent.",
-                    "四台客户端必须全部在线并逐一同意，插件才会发送任何手牌数据。"));
+                    $"Same-table clients: {plugin.HandSync.SameTableClientCount}/4. Automatic sharing requires exactly 2 big and 2 small clients on the same verified table.",
+                    $"同桌客户端：{plugin.HandSync.SameTableClientCount}/4。自动共享要求同一张已验证牌桌上恰好有 2 个大号和 2 个小号。"));
             }
             if (!string.IsNullOrWhiteSpace(plugin.HandSync.LastError))
                 Theme.Subtle(plugin.HandSync.LastError);
 
             Theme.Subtle(Loc.T(
                 $"Current role: {cfg.LanPeerAccountType}",
-                $"当前身份：{(isBig ? "大号" : "小号")}（默认小号，只有主动选择大号才会标记为大号）"));
+                $"当前身份：{(isBig ? $"大号 {plugin.LanPeers.BigAccountOrdinal}" : "小号")}（默认小号，只有主动选择大号才会标记为大号）"));
 
             ImGui.Separator();
             var roster = plugin.LanPeers.Roster;
@@ -226,8 +209,15 @@ $method = @'
                     string origin = local
                         ? Loc.T("This PC", "本机")
                         : member.Address;
-                    ImGui.BulletText(
-                        $"{i + 1}. {member.AccountType}  |  {origin}  |  {(member.ShareHandsConsent ? "同意共享手牌" : "未同意共享手牌")}  |  {member.PluginVersion}");
+                    string tableStatus = member.MatchKey == plugin.LanPeers.CurrentMatchKey && !string.IsNullOrEmpty(member.MatchKey)
+                        ? "当前牌桌" : "非当前牌桌/未识别";
+                    int bigOrder = member.AccountType == "大号"
+                        ? plugin.LanPeers.SameTableRoster.Where(x => x.AccountType == "大号")
+                            .OrderBy(x => x.InstanceId, StringComparer.Ordinal)
+                            .TakeWhile(x => x.InstanceId != member.InstanceId).Count() + 1
+                        : 0;
+                    string role = member.AccountType == "大号" ? $"大号 {bigOrder}" : "小号";
+                    ImGui.BulletText($"{i + 1}. {role} | {origin} | {tableStatus} | {member.PluginVersion}");
                 }
                 else
                 {
@@ -253,10 +243,10 @@ $method = @'
             if (!enabled && syncEnabled)
                 Theme.Subtle(Loc.T("Enable node discovery first; public-state sync stays paused until then.", "请先开启节点发现；在此之前公共状态同步不会运行。"));
 
-            var localSnapshot = plugin.Aggregator.Latest;
-            if (localSnapshot is null)
+            var publicLocalSnapshot = plugin.Aggregator.Latest;
+            if (publicLocalSnapshot is null)
                 Theme.Subtle(Loc.T("Local table state: waiting for a table.", "本机牌局状态：等待进入牌桌。"));
-            else if (!localSnapshot.PublicStateConsistent)
+            else if (!publicLocalSnapshot.PublicStateConsistent)
                 Theme.Subtle(Loc.T("Local public state is not verified yet; it will not be broadcast.", "本机公共状态尚未通过一致性校验，不会广播。"));
             else
                 Theme.Subtle(Loc.T("Local public state: available.", "本机公共状态：可用。"));
@@ -290,8 +280,8 @@ $method = @'
             if (!string.IsNullOrWhiteSpace(plugin.PublicTableSync.LastError))
                 Theme.Subtle(plugin.PublicTableSync.LastError);
             Theme.Subtle(Loc.T(
-                "Public-state packets use UDP 47722. Enable this option on every PC. Private hand sharing is a separate four-person opt-in.",
-                "公开状态使用 UDP 47722。需要在每台电脑上分别开启。私人暗手牌共享是独立的四人共同同意功能。"));
+                "Public-state packets use UDP 47722. Private hands use UDP 47723 and only activate for the matched 2-big / 2-small table.",
+                "公开状态使用 UDP 47722。四家暗手牌使用 UDP 47723，只有识别到 2 大号 + 2 小号同桌时才自动开启。"));
 
             if (!string.IsNullOrWhiteSpace(plugin.LanPeers.LastError))
                 Theme.Subtle(plugin.LanPeers.LastError);
@@ -301,8 +291,8 @@ $method = @'
                 "Discovery uses the local IPv4 subnet and UDP 47721. Other plugin users on the same subnet may also be detected; the list is not an authoritative UU room-member list.",
                 "节点发现基于本机可见 IPv4 子网和 UDP 47721。同一子网的其他插件用户也可能被发现；列表并不是 UU 房间成员的权威名单。"));
             Theme.Subtle(Loc.T(
-                "Private hand sharing is a separate opt-in: all four clients must explicitly agree before any concealed hand is sent.",
-                "暗手牌共享是独立的自愿功能：四台客户端必须全部明确同意后，才会发送任何暗手牌。"));
+                "The game addon snapshot has no player-name field. A private table is recognized conservatively by 4 same-LAN clients with the same match key and exactly 2 big / 2 small roles.",
+                "当前游戏快照不含玩家姓名字段。插件通过同一局域网 4 个客户端、相同牌局指纹及恰好 2 大号 + 2 小号进行保守识别。"));
         }
     }
 
@@ -313,4 +303,4 @@ if (-not $window.Contains('    private void DrawLanPeerCard(Configuration cfg)')
 }
 Set-Content -Path $windowPath -Value $window -NoNewline
 
-Write-Host 'LAN peer discovery and opt-in public table-state sync overlays applied. Hidden hands and actions are not transmitted.'
+Write-Host 'LAN peer discovery, public table-state sync and automatic private four-hand sync overlays applied.'
