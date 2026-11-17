@@ -1,3 +1,4 @@
+# Build verification trigger: compile the current integration branch.
 $ErrorActionPreference = 'Stop'
 
 function Replace-One([string]$Path, [string]$Old, [string]$New, [string]$Label) {
