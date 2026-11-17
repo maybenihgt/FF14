@@ -837,22 +837,13 @@ Set-Content -Path $windowPath -Value $window -NoNewline
 $autoPath = 'upstream/Mahjong.Plugin.Dalamud/Actions/AutoPlayLoop.cs'
 $auto = Get-Content $autoPath -Raw
 
-$oldResultLatch = @'
-        EmitProgressing();
-        handResultDispatchedThisInstance = true;
-        ScheduleHandResultAdvance(context);
-'@
-$newResultLatch = @'
-        EmitProgressing();
-        // Latch only after the scheduled callback has actually dispatched successfully.
-        // If the scheduler cancels the callback or the addon rejects the click, allow retry.
-        ScheduleHandResultAdvance(context);
-'@
-if ($auto.Contains($oldResultLatch)) {
-    $auto = $auto.Replace($oldResultLatch, $newResultLatch)
+# Remove the optimistic latch by matching the assignment independently of surrounding whitespace.
+$oldLatchLine = '        handResultDispatchedThisInstance = true;'
+if ($auto.Contains($oldLatchLine)) {
+    $auto = $auto.Replace($oldLatchLine, '// SP1.8: latch is set only after a successful Next dispatch.')
 }
-elseif (-not $auto.Contains('// Latch only after the scheduled callback has actually dispatched successfully.')) {
-    throw 'SP1.8 hand-result scheduling latch anchor not found.'
+elseif (-not $auto.Contains('// SP1.8: latch is set only after a successful Next dispatch.')) {
+    throw 'SP1.8 hand-result latch assignment not found.'
 }
 
 $oldResultDispatch = @'
