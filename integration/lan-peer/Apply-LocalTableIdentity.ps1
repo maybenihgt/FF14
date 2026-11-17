@@ -1,0 +1,43 @@
+$ErrorActionPreference = 'Stop'
+
+$path = 'upstream/Mahjong.Plugin.Dalamud/Networking/LanPeerDiscovery.cs'
+$source = Get-Content $path -Raw
+
+$start = $source.IndexOf('    private static string ComputeMatchKey(StateSnapshot? snapshot)')
+if ($start -lt 0) { throw 'ComputeMatchKey method not found.' }
+$next = $source.IndexOf('    private async Task BroadcastLoopAsync', $start)
+if ($next -lt 0) { throw 'ComputeMatchKey end marker not found.' }
+
+$newMethod = @'
+    private static string ComputeMatchKey(StateSnapshot? snapshot)
+    {
+        // The China-client candidate profile does not yet expose a verified MJAI
+        // seat/dealer context. Do not require PublicStateConsistent or SeatInfo:
+        // those flags are precisely what kept all four local clients at 0/4.
+        if (snapshot is null ||
+            snapshot.Hand.Count is not (13 or 14) ||
+            snapshot.Scores.Count != 4 ||
+            snapshot.Seats.Count != 4 ||
+            snapshot.WallRemaining is < 0 or > 70)
+            return string.Empty;
+
+        // Score order is rotated around each local player, so canonicalize it.
+        string scoreVector = string.Join(",", snapshot.Scores.Order());
+
+        // Every viewpoint at the same table sees the same dora indicators and
+        // live-wall count. These are available from the local Emj view even when
+        // the protocol/MJAI stream is not admitted.
+        string dora = string.Join(",", snapshot.DoraIndicators.Select(t => t.Id).Order());
+        string value = string.Join("|",
+            "doman-local-table-v2",
+            snapshot.WallRemaining,
+            scoreVector,
+            dora);
+
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value)));
+    }
+
+'@
+$source = $source.Substring(0, $start) + $newMethod + $source.Substring($next)
+Set-Content -Path $path -Value $source -NoNewline
+Write-Host 'Same-table identity now uses perspective-invariant local game state without requiring MJAI admission.'
