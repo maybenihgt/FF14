@@ -1021,3 +1021,78 @@ Set-Content -Path $autoPath -Value $auto -NoNewline
 
 Write-Host 'Applied SP1.9: stale Ron requires authoritative offer; stale Tsumo falls back to verified discard.'
 
+
+# SP1.9: a stale Mortal Pass must not suppress an otherwise legal self-discard.
+# The recommendation panel can have a valid local discard while Mortal returns
+# Pass from a stale/empty reaction. Recover only from the same live snapshot,
+# and only when the local discard tile is present in-hand and legal.
+$autoPath = 'upstream/Mahjong.Plugin.Dalamud/Actions/AutoPlayLoop.cs'
+$auto = [regex]::Replace((Get-Content $autoPath -Raw), '\r\n?', [string][char]10)
+$oldPassGuard = @'
+        if (choice.Kind == ActionKind.AnKan)
+        {
+'@
+$newPassGuard = @'
+        if (choice.Kind == ActionKind.Pass && snap.Legal.Can(ActionFlags.Discard))
+        {
+            var localFallback = plugin.Aggregator.Choose(snap);
+            bool fallbackTileInHand = false;
+            if (localFallback.DiscardTile is { } fallbackTile)
+            {
+                foreach (var heldTile in snap.Hand)
+                {
+                    if (heldTile == fallbackTile)
+                    {
+                        fallbackTileInHand = true;
+                        break;
+                    }
+                }
+
+                if (localFallback.Kind == ActionKind.Discard
+                    && fallbackTileInHand
+                    && snap.Legal.AllowsDiscard(fallbackTile))
+                {
+                    log.Warning($"[AutoPlayLoop] replaced policy Pass with verified local discard {fallbackTile}; policyReason={choice.Reasoning}; localReason={localFallback.Reasoning}; state={snap.AddonStateCode}; hand={snap.Hand.Count}");
+                    choice = localFallback with
+                    {
+                        Reasoning = $"self-discard fallback after Mortal Pass: {localFallback.Reasoning}",
+                    };
+                    hasMortalWait = false;
+                    plugin.Aggregator.PublishLocalExecution(snap, choice, "local-fallback-after-pass");
+                }
+                else
+                {
+                    log.Warning($"[AutoPlayLoop] kept policy Pass because local fallback was not a verified legal discard; localKind={localFallback.Kind}; tile={fallbackTile}; inHand={fallbackTileInHand}; policyReason={choice.Reasoning}; state={snap.AddonStateCode}; hand={snap.Hand.Count}");
+                }
+            }
+            else
+            {
+                log.Warning($"[AutoPlayLoop] kept policy Pass because local fallback had no discard tile; localKind={localFallback.Kind}; localReason={localFallback.Reasoning}; policyReason={choice.Reasoning}; state={snap.AddonStateCode}; hand={snap.Hand.Count}");
+            }
+        }
+
+        if (choice.Kind == ActionKind.AnKan)
+        {
+'@
+$oldPassGuard = [regex]::Replace($oldPassGuard, '\r\n?', [string][char]10)
+$newPassGuard = [regex]::Replace($newPassGuard, '\r\n?', [string][char]10)
+if ($auto.Contains($oldPassGuard) -and -not $auto.Contains('replaced policy Pass with verified local discard')) {
+    $auto = $auto.Replace($oldPassGuard, $newPassGuard)
+}
+elseif (-not $auto.Contains('replaced policy Pass with verified local discard')) {
+    throw 'SP1.9 legal-discard Pass recovery anchor not found in DispatchPolicyChoice.'
+}
+Set-Content -Path $autoPath -Value $auto -NoNewline
+
+# Mark the package so the in-game title proves which fix is installed.
+$windowPath = 'upstream/Mahjong.Plugin.Dalamud/UI/MainWindow.cs'
+$window = Get-Content $windowPath -Raw
+$window = $window.Replace('BuildUiVersion = "SP1.8"', 'BuildUiVersion = "SP1.9"')
+if (-not $window.Contains('BuildUiVersion = "SP1.9"')) {
+    throw 'Could not set SP1.9 build label.'
+}
+Set-Content -Path $windowPath -Value $window -NoNewline
+
+Write-Host 'Applied SP1.9 legal-discard Pass recovery: a stale policy Pass now falls back only to a verified local discard.'
+
+
