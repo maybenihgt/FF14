@@ -445,7 +445,7 @@ if (Test-Path $humanTestPath) {
 
 # Explicitly clear previous-match / previous-hand automation state at verified MJAI boundaries.
 $autoPath = 'upstream/Mahjong.Plugin.Dalamud/Actions/AutoPlayLoop.cs'
-$auto = Get-Content $autoPath -Raw
+$auto = (Get-Content $autoPath -Raw) -replace "`r`n?", "`n"
 $oldEventStart = @'
     private void OnPublicServerEvent(IMjaiEvent evt, ServerHandResult? result)
     {
@@ -464,6 +464,8 @@ $newEventStart = @'
 
         if (evt is MjaiEndKyoku && result is not null)
 '@
+$oldEventStart = $oldEventStart -replace "`r`n?", "`n"
+$newEventStart = $newEventStart -replace "`r`n?", "`n"
 if ($auto.Contains($oldEventStart)) { $auto = $auto.Replace($oldEventStart, $newEventStart) }
 elseif (-not $auto.Contains('ResetAutomationAtNewBoundary("start_kyoku")')) { throw 'Public server event boundary insertion point not found.' }
 
@@ -515,6 +517,8 @@ $newAwaiting = @'
             return;
         }
 '@
+$oldAwaiting = $oldAwaiting -replace "`r`n?", "`n"
+$newAwaiting = $newAwaiting -replace "`r`n?", "`n"
 if ($auto.Contains($oldAwaiting)) { $auto = $auto.Replace($oldAwaiting, $newAwaiting) }
 elseif (-not $auto.Contains('bool awaitingNextHand = plugin.PublicState.AwaitingNextHand;')) { throw 'AwaitingNextHand gate insertion point not found.' }
 Set-Content -Path $autoPath -Value $auto -NoNewline
@@ -523,7 +527,7 @@ Set-Content -Path $autoPath -Value $auto -NoNewline
 # Tsumogiri policy must never make an open call. Keep legal wins, pass all other
 # opponent/self-call prompts, and recover a post-call discard with the normal legal policy.
 $autoPath = 'upstream/Mahjong.Plugin.Dalamud/Actions/AutoPlayLoop.cs'
-$auto = Get-Content $autoPath -Raw
+$auto = (Get-Content $autoPath -Raw) -replace "`r`n?", "`n"
 
 $oldCallChoice = @'
             if (!TryChoose(snap, out var choice))
@@ -533,6 +537,7 @@ $oldCallChoice = @'
                 return;
             }
 '@
+$oldCallChoice = $oldCallChoice -replace "`r`n?", "`n"
 $newCallChoice = $oldCallChoice
 if ($auto.Contains('tsumogiri mode: decline calls and wait for own draw'))
 {
@@ -936,7 +941,7 @@ elseif (-not $bridge.Contains('internal bool HasAuthoritativeWinOffer')) {
 Set-Content -Path $bridgePath -Value $bridge -NoNewline
 
 $autoPath = 'upstream/Mahjong.Plugin.Dalamud/Actions/AutoPlayLoop.cs'
-$auto = Get-Content $autoPath -Raw
+$auto = (Get-Content $autoPath -Raw) -replace "`r`n?", "`n"
 
 # Suppress UI-only Ron flags before both the terminal-win guard and local fallback.
 $oldTryChooseStart = '        snapshot = plugin.Aggregator.Enrich(snapshot);'
