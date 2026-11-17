@@ -500,12 +500,89 @@ if (Test-Path $humanTestPath) {
     Set-Content -Path $humanTestPath -Value $humanTests -NoNewline
 }
 
+
+# Explicitly clear previous-match / previous-hand automation state at verified MJAI boundaries.
+$autoPath = 'upstream/Mahjong.Plugin.Dalamud/Actions/AutoPlayLoop.cs'
+$auto = Get-Content $autoPath -Raw
+$oldEventStart = @'
+    private void OnPublicServerEvent(IMjaiEvent evt, ServerHandResult? result)
+    {
+        if (evt is MjaiEndKyoku && result is not null)
+'@
+$newEventStart = @'
+    private void OnPublicServerEvent(IMjaiEvent evt, ServerHandResult? result)
+    {
+        // end_game/end_kyoku deliberately stop actions until a fresh start_kyoku.
+        // When the next game/hand is positively observed, clear any latches and delayed work
+        // left by the previous East 4 / result screen before accepting new decisions.
+        if (evt is MjaiStartGame)
+            ResetAutomationAtNewBoundary("start_game");
+        else if (evt is MjaiStartKyoku)
+            ResetAutomationAtNewBoundary("start_kyoku");
+
+        if (evt is MjaiEndKyoku && result is not null)
+'@
+if ($auto.Contains($oldEventStart)) { $auto = $auto.Replace($oldEventStart, $newEventStart) }
+elseif (-not $auto.Contains('ResetAutomationAtNewBoundary("start_kyoku")')) { throw 'Public server event boundary insertion point not found.' }
+
+$helperAnchor = '    private void RecordServerActionOutcome(ServerActionOutcomeTracker.Outcome outcome)'
+$helper = @'
+    private void ResetAutomationAtNewBoundary(string boundary)
+    {
+        CancelPending();
+        handResultFirstSeenAt = null;
+        handResultDispatchedThisInstance = false;
+        terminalWinDispatchedAt = null;
+        pendingTerminalWin = null;
+        terminalWinConfirmation.Reset();
+        hasMortalWait = false;
+        dismissedExpiredPromptKey = null;
+        LastActionDescription = $"new {boundary} observed; previous-hand automation state cleared";
+        log.Info($"[AutoPlayLoop] Reset previous-hand automation state at {boundary}.");
+    }
+
+'@
+if (-not $auto.Contains('private void ResetAutomationAtNewBoundary(')) {
+    if (-not $auto.Contains($helperAnchor)) { throw 'Boundary reset helper insertion point not found.' }
+    $auto = $auto.Replace($helperAnchor, $helper + $helperAnchor)
+}
+
+# Emit one transition log for the AwaitingNextHand gate, so a missing start_kyoku is diagnosable.
+$auto = $auto.Replace(
+    '    private bool disposed;',
+    '    private bool disposed;' + [Environment]::NewLine + '    private bool? lastAwaitingNextHand;')
+$oldAwaiting = @'
+        if (plugin.PublicState.AwaitingNextHand)
+        {
+            CheckStuckStateAndEmit(null);
+            EmitSkipReason("server result confirmed; waiting for next hand", -1, -1, 0);
+            return;
+        }
+'@
+$newAwaiting = @'
+        bool awaitingNextHand = plugin.PublicState.AwaitingNextHand;
+        if (lastAwaitingNextHand != awaitingNextHand)
+        {
+            lastAwaitingNextHand = awaitingNextHand;
+            log.Info($"[AutoPlayLoop] AwaitingNextHand={awaitingNextHand}; addonState={ReadStateCode()}.");
+        }
+        if (awaitingNextHand)
+        {
+            CheckStuckStateAndEmit(null);
+            EmitSkipReason("server result confirmed; waiting for next hand", -1, -1, 0);
+            return;
+        }
+'@
+if ($auto.Contains($oldAwaiting)) { $auto = $auto.Replace($oldAwaiting, $newAwaiting) }
+elseif (-not $auto.Contains('bool awaitingNextHand = plugin.PublicState.AwaitingNextHand;')) { throw 'AwaitingNextHand gate insertion point not found.' }
+Set-Content -Path $autoPath -Value $auto -NoNewline
+
 # Single-player version in the window title.
 $window = Get-Content $windowPath -Raw
 if (-not $window.Contains('private const string BuildUiVersion')) {
     $window = $window.Replace(
         '    private readonly Plugin plugin;',
-        '    private const string BuildUiVersion = "SP1.2";' + [Environment]::NewLine + '    private readonly Plugin plugin;')
+        '    private const string BuildUiVersion = "SP1.3";' + [Environment]::NewLine + '    private readonly Plugin plugin;')
 }
 $window = $window.Replace(
     ': base("Doman Mahjong Solver###domanmahjong-main")',
