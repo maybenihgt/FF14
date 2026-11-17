@@ -722,7 +722,7 @@ Set-Content -Path $windowPath -Value $window -NoNewline
 $autoPath = 'upstream/Mahjong.Plugin.Dalamud/Actions/AutoPlayLoop.cs'
 $auto = Get-Content $autoPath -Raw
 
-$policyMarker = '    private void DispatchPolicyChoice(StateSnapshot snap, ActionChoice choice)' + [Environment]::NewLine + '    {'
+$sourceNewline = [regex]::Match($auto, '\r?\n').Value`n$policyMarker = '    private void DispatchPolicyChoice(StateSnapshot snap, ActionChoice choice)' + $sourceNewline + '    {'
 $policyGuard = @'
     private void DispatchPolicyChoice(StateSnapshot snap, ActionChoice choice)
     {
@@ -739,7 +739,7 @@ if (-not $auto.Contains('strict tsumogiri safety: blocked Riichi policy choice')
     $auto = $auto.Replace($policyMarker, $policyGuard.TrimEnd())
 }
 
-$callMarker = '    private void DispatchCallChoice(StateSnapshot snap, ActionChoice choice)' + [Environment]::NewLine + '    {'
+$callMarker = '    private void DispatchCallChoice(StateSnapshot snap, ActionChoice choice)' + $sourceNewline + '    {'
 $callGuard = @'
     private void DispatchCallChoice(StateSnapshot snap, ActionChoice choice)
     {
@@ -768,17 +768,17 @@ Set-Content -Path $autoPath -Value $auto -NoNewline
 # Warm the local policy's JIT/scoring path during plugin construction, before the first hand.
 $statePath = 'upstream/Mahjong.Plugin.Dalamud/GameState/StateAggregator.cs'
 $state = Get-Content $statePath -Raw
+$stateNewline = [regex]::Match($state, '\r?\n').Value
 if (-not $state.Contains('using Mahjong.Core;')) {
-    $state = $state.Replace('using System;' + [Environment]::NewLine, 'using System;' + [Environment]::NewLine + 'using Mahjong.Core;' + [Environment]::NewLine)
+    $state = $state.Replace('using System;', 'using System;' + $stateNewline + 'using Mahjong.Core;')
 }
-$ctorMarker = '        this.configuration = configuration;' + [Environment]::NewLine
-$warmupCall = '        this.configuration = configuration;' + [Environment]::NewLine +
-    '        _ = PolicyJitWarmup.Value;' + [Environment]::NewLine
+$ctorMarker = '        this.configuration = configuration;'
+$warmupCall = $ctorMarker + $stateNewline + '        _ = PolicyJitWarmup.Value;'
 if (-not $state.Contains('PolicyJitWarmup.Value')) {
     if (-not $state.Contains($ctorMarker)) { throw 'SP1.7 StateAggregator constructor anchor not found.' }
     $state = $state.Replace($ctorMarker, $warmupCall)
 }
-$fieldMarker = '    private bool disposed;' + [Environment]::NewLine
+$fieldMarker = '    private bool disposed;'
 $warmupFields = @'
     private bool disposed;
     private static readonly Lazy<bool> PolicyJitWarmup = new(WarmupPolicyJit, true);
@@ -814,7 +814,7 @@ $warmupFields = @'
 '@
 if (-not $state.Contains('private static bool WarmupPolicyJit()')) {
     if (-not $state.Contains($fieldMarker)) { throw 'SP1.7 StateAggregator field anchor not found.' }
-    $state = $state.Replace($fieldMarker, $warmupFields.TrimEnd() + [Environment]::NewLine)
+    $state = $state.Replace($fieldMarker, $warmupFields.TrimEnd())
 }
 Set-Content -Path $statePath -Value $state -NoNewline
 
