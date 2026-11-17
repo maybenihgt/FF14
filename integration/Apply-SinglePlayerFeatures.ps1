@@ -599,6 +599,74 @@ if ($updatedCall -eq $callBlock -and -not $callBlock.Contains('strict tsumogiri:
 }
 $auto = $auto.Substring(0, $callStart) + $updatedCall + $auto.Substring($callEnd)
 
+# Own-draw path: strict tsumogiri uses the verified physical draw slot 13.
+$discardStart = $auto.IndexOf('    private void ScheduleDiscard(DispatchContext context)')
+$discardEnd = $auto.IndexOf('    /// <summary>On HookFailed', $discardStart)
+if ($discardStart -lt 0 -or $discardEnd -lt 0) { throw 'ScheduleDiscard method boundaries not found.' }
+$discardBlock = $auto.Substring($discardStart, $discardEnd - $discardStart)
+$discardPattern = '(?s)            if \(!TryChoose\(snap, out var choice\)\)\s*\{\s*                LastActionDescription = "waiting for Mortal discard";\s*                fsm\.ClearContext\(\);\s*                return;\s*            \}'
+$discardReplacement = @'
+            bool feederMode = plugin.Configuration.AutoPlayMode == AutoPlayMode.Tsumogiri;
+            bool isTerminalWin = snap.Legal.Can(ActionFlags.Ron) || snap.Legal.Can(ActionFlags.Tsumo);
+            ActionChoice choice;
+            int drawnSlot = -1;
+            bool drawnIsRed = false;
+            if (feederMode && isTerminalWin)
+            {
+                if (!snap.Legal.Can(ActionFlags.Pass))
+                {
+                    LastActionDescription = "tsumogiri paused: terminal win prompt has no legal Pass";
+                    fsm.ClearContext();
+                    return;
+                }
+                choice = ActionChoice.Pass("strict tsumogiri: decline Ron/Tsumo");
+            }
+            else if (feederMode)
+            {
+                if (!TryChooseTsumogiri(snap, out choice, out drawnSlot, out drawnIsRed, out string tsumogiriError))
+                {
+                    LastActionDescription = $"tsumogiri paused: {tsumogiriError}";
+                    log.Warning($"[AutoPlayLoop] {LastActionDescription}");
+                    fsm.ClearContext();
+                    return;
+                }
+            }
+            else if (!TryChoose(snap, out choice))
+            {
+                LastActionDescription = "waiting for Mortal discard";
+                fsm.ClearContext();
+                return;
+            }
+'@
+$updatedDiscard = [regex]::Replace($discardBlock, $discardPattern, $discardReplacement.TrimEnd(), 1)
+if ($updatedDiscard -eq $discardBlock -and -not $discardBlock.Contains('strict tsumogiri: decline Ron/Tsumo')) {
+    throw 'ScheduleDiscard choice block not found.'
+}
+$dispatchPattern = '(?s)            if \(isTerminalWin\)\s*                DispatchCallChoice\(snap, choice\);\s*            else\s*                DispatchPolicyChoice\(snap, choice\);'
+$dispatchReplacement = @'
+            if (feederMode && isTerminalWin)
+                DispatchCallChoice(snap, choice);
+            else if (feederMode)
+            {
+                var result = plugin.Dispatcher.DispatchDiscard(drawnSlot);
+                LastActionDescription = $"auto-tsumogiri {choice.DiscardTile} slot={drawnSlot} → {result}";
+                plugin.GameLogger.RecordAction(ActionKind.Discard, choice.DiscardTile, drawnSlot,
+                    result.ToString(), choice.Reasoning, drawnIsRed);
+                EmitDispatchFinding("tsumogiri", result, tile: choice.DiscardTile, slot: drawnSlot,
+                    snap: snap, isRed: drawnIsRed);
+                ClearRetryDebounceIfHookFailed(result);
+            }
+            else if (isTerminalWin)
+                DispatchCallChoice(snap, choice);
+            else
+                DispatchPolicyChoice(snap, choice);
+'@
+$updatedDiscard2 = [regex]::Replace($updatedDiscard, $dispatchPattern, $dispatchReplacement.TrimEnd(), 1)
+if ($updatedDiscard2 -eq $updatedDiscard -and -not $updatedDiscard.Contains('auto-tsumogiri {choice.DiscardTile}')) {
+    throw 'ScheduleDiscard dispatch block not found.'
+}
+$auto = $auto.Substring(0, $discardStart) + $updatedDiscard2 + $auto.Substring($discardEnd)
+
 $terminalStart = $auto.IndexOf('    private void ScheduleTerminalWinConfirmation(')
 $terminalEnd = $auto.IndexOf('    private static int? OwnDiscardCount(StateSnapshot snap)', $terminalStart)
 if ($terminalStart -lt 0 -or $terminalEnd -lt 0) { throw 'Terminal confirmation method boundaries not found.' }
