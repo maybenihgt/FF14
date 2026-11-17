@@ -35,8 +35,8 @@ $helper = @'
 
         choice = ActionChoice.Discard(
             best.Discard,
-            $"private quick-win: shanten={best.ShantenAfter}, ukeire={best.UkeireWeighted}, yaku={best.YakuPotential:0.##}",
-            DiscardIsRed: best.IsRed);
+            $"private quick-win: shanten={best.ShantenAfter}, ukeire={best.UkeireWeighted}, yaku={best.YakuPotential:0.##}")
+            with { DiscardIsRed = best.IsRed };
         return true;
     }
 
@@ -44,6 +44,45 @@ $helper = @'
 if (-not $source.Contains('private bool IsMultiplayerSmallAccount()')) {
     if (-not $source.Contains($helperMarker)) { throw 'AutoPlayLoop helper insertion marker not found.' }
     $source = $source.Replace($helperMarker, $helper + $helperMarker)
+}
+
+# A small account must not enter the terminal-win confirmation tracker.
+$smallTrackerAnchor = '        terminalWinConfirmation.Observe(snapshot, clock.UtcNow);'
+$smallTrackerReplacement = @'
+        if (IsMultiplayerSmallAccount())
+        {
+            pendingTerminalWin = null;
+            terminalWinConfirmation.Reset();
+            return;
+        }
+
+        terminalWinConfirmation.Observe(snapshot, clock.UtcNow);
+'@
+if (-not $source.Contains('small account: no terminal-win tracking')) {
+    if (-not $source.Contains($smallTrackerAnchor)) { throw 'Small-account terminal tracker insertion point not found.' }
+    $source = $source.Replace($smallTrackerAnchor, $smallTrackerReplacement.TrimEnd())
+}
+
+# Small accounts must not auto-confirm a terminal win prompt; let the pass handler decline it.
+$terminalBranch = @'
+        if (isTerminalWinConfirmation)
+        {
+            EmitProgressing();
+            ScheduleTerminalWinConfirmation(context, terminalWinKind);
+            return;
+        }
+'@
+$terminalReplacement = @'
+        if (isTerminalWinConfirmation && !IsMultiplayerSmallAccount())
+        {
+            EmitProgressing();
+            ScheduleTerminalWinConfirmation(context, terminalWinKind);
+            return;
+        }
+'@
+if (-not $source.Contains('isTerminalWinConfirmation && !IsMultiplayerSmallAccount()')) {
+    if (-not $source.Contains($terminalBranch)) { throw 'Small-account terminal confirmation branch not found.' }
+    $source = $source.Replace($terminalBranch, $terminalReplacement)
 }
 
 # Small accounts always tsumogiri on their own discard turn; they never use the hand scorer.
