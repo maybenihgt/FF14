@@ -40,4 +40,59 @@ $newMethod = @'
 '@
 $source = $source.Substring(0, $start) + $newMethod + $source.Substring($next)
 Set-Content -Path $path -Value $source -NoNewline
-Write-Host 'Same-table identity now uses perspective-invariant local game state without requiring MJAI admission.'
+
+# Allow private hand exchange when the China-client local snapshot is valid even
+# though MJAI seat/dealer observations are not admitted. The seat wind is marked
+# unknown (-1), not fabricated, and the table key still has to match all peers.
+$handPath = 'upstream/Mahjong.Plugin.Dalamud/Networking/FourPlayerHandSync.cs'
+$hand = Get-Content $handPath -Raw
+
+$oldReady = @'
+    private static bool IsReadySnapshot(StateSnapshot snapshot) =>
+        snapshot.PublicStateConsistent &&
+        snapshot.Hand.Count is 13 or 14 &&
+        snapshot.HandIsRed.Count == snapshot.Hand.Count &&
+        snapshot.Seats.Count == 4 &&
+        snapshot.Scores.Count == 4 &&
+        (snapshot.Observations & RequiredPublicObservations) == RequiredPublicObservations;
+'@
+$newReady = @'
+    private static bool IsReadySnapshot(StateSnapshot snapshot) =>
+        snapshot.Hand.Count is 13 or 14 &&
+        snapshot.HandIsRed.Count == snapshot.Hand.Count;
+'@
+if (-not $hand.Contains($newReady)) {
+    if (-not $hand.Contains($oldReady)) { throw 'HandSync ready-snapshot gate not found.' }
+    $hand = $hand.Replace($oldReady, $newReady)
+}
+
+$oldLocalGate = @'
+        if (snapshot is null || !IsReadySnapshot(snapshot) ||
+            snapshot.SeatWind is not (>= 0 and <= 3) || string.IsNullOrEmpty(matchKey))
+            return false;
+'@
+$newLocalGate = @'
+        if (snapshot is null || !IsReadySnapshot(snapshot) || string.IsNullOrEmpty(matchKey))
+            return false;
+'@
+if (-not $hand.Contains($newLocalGate)) {
+    if (-not $hand.Contains($oldLocalGate)) { throw 'HandSync local snapshot gate not found.' }
+    $hand = $hand.Replace($oldLocalGate, $newLocalGate)
+}
+
+$oldWind = '                            snapshot.SeatWind!.Value,'
+$newWind = '                            snapshot.SeatWind ?? -1,'
+if (-not $hand.Contains($newWind)) {
+    if (-not $hand.Contains($oldWind)) { throw 'HandSync seat-wind packet field not found.' }
+    $hand = $hand.Replace($oldWind, $newWind)
+}
+
+$oldValidation = '            frame.SeatWind is < 0 or > 3 || frame.RoundWind is < 0 or > 3 ||'
+$newValidation = '            frame.SeatWind is < -1 or > 3 || frame.RoundWind is < 0 or > 3 ||'
+if (-not $hand.Contains($newValidation)) {
+    if (-not $hand.Contains($oldValidation)) { throw 'HandSync frame seat-wind validation not found.' }
+    $hand = $hand.Replace($oldValidation, $newValidation)
+}
+Set-Content -Path $handPath -Value $hand -NoNewline
+
+Write-Host 'Same-table identity and private hand exchange now work without MJAI seat metadata; unknown seat wind remains explicitly -1.'
