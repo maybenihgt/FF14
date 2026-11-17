@@ -1401,9 +1401,11 @@ Set-Content -Path $pluginPath -Value $plugin -NoNewline
 $windowPath = 'upstream/Mahjong.Plugin.Dalamud/UI/MainWindow.cs'
 $window = [regex]::Replace((Get-Content $windowPath -Raw), '\r\n?', [string][char]10)
 $drawCall = '        DrawLiveCard();'
-$drawReplacement = '        DrawRankCard();' + [string][char]10
-    + '        ImGui.Dummy(new Vector2(0, 4));' + [string][char]10
-    + $drawCall
+$drawReplacement = @(
+    '        DrawRankCard();'
+    '        ImGui.Dummy(new Vector2(0, 4));'
+    $drawCall
+) -join [string][char]10
 if ($window.Contains($drawCall) -and -not $window.Contains('private void DrawRankCard()')) {
     $window = $window.Replace($drawCall, $drawReplacement)
 }
