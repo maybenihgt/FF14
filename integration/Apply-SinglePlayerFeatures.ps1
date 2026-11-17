@@ -913,3 +913,101 @@ Set-Content -Path $windowPath -Value $window -NoNewline
 Write-Host 'Applied SP1.8 result-screen retry handling and diagnostics.'
 
 Write-Host 'Applied single-player options, independent auto-queue, validated tsumogiri and full-match limit.'
+
+# SP1.9: reject stale localized win labels unless the action is independently verified.
+# A generic CN "胡/和" label can be retained by the addon after the prompt has closed.
+# Tsumo is verified by the local scorer; Ron additionally requires an authoritative
+# opponent discard or opponent kakan observed on the server stream.
+
+$bridgePath = 'upstream/Mahjong.Plugin.Dalamud/Mortal/LiveMortalBridge.cs'
+$bridge = Get-Content $bridgePath -Raw
+$offerMarker = '    internal bool HasAuthoritativeOpponentDiscard =>' + [Environment]::NewLine + '        lastNetworkDiscard is { Actor: > 0 };'
+$offerExtended = $offerMarker + [Environment]::NewLine + [Environment]::NewLine +
+    '    internal bool HasAuthoritativeWinOffer =>' + [Environment]::NewLine +
+    '        lastNetworkDiscard is { Actor: > 0 } || lastNetworkKakan is { Actor: > 0 };'
+if ($bridge.Contains($offerMarker) -and -not $bridge.Contains('internal bool HasAuthoritativeWinOffer')) {
+    $bridge = $bridge.Replace($offerMarker, $offerExtended)
+}
+elseif (-not $bridge.Contains('internal bool HasAuthoritativeWinOffer')) {
+    throw 'SP1.9 authoritative win-offer insertion point not found.'
+}
+Set-Content -Path $bridgePath -Value $bridge -NoNewline
+
+$autoPath = 'upstream/Mahjong.Plugin.Dalamud/Actions/AutoPlayLoop.cs'
+$auto = Get-Content $autoPath -Raw
+
+# Suppress UI-only Ron flags before both the terminal-win guard and local fallback.
+$oldTryChooseStart = '        snapshot = plugin.Aggregator.Enrich(snapshot);'
+$newTryChooseStart = @'
+        snapshot = plugin.Aggregator.Enrich(snapshot);
+        if (snapshot.Legal.Can(ActionFlags.Ron) && !plugin.MortalBridge.HasAuthoritativeWinOffer)
+        {
+            snapshot = snapshot with { Legal = snapshot.Legal with { Flags = snapshot.Legal.Flags & ~ActionFlags.Ron } };
+            log.Warning($"[AutoPlayLoop] ignored unverified Ron UI flag; no authoritative opponent discard/kakan is available (state={snapshot.AddonStateCode}, hand={snapshot.Hand.Count}).");
+        }
+'@
+if (-not $auto.Contains('[AutoPlayLoop] ignored unverified Ron UI flag')) {
+    if (-not $auto.Contains($oldTryChooseStart)) { throw 'SP1.9 TryChoose insertion point not found.' }
+    $auto = $auto.Replace($oldTryChooseStart, $newTryChooseStart.TrimEnd())
+}
+
+# On a discard surface, a stale Tsumo label must not suppress a non-winning discard.
+# Keep a genuine Tsumo pending only when the local scorer validates the complete hand.
+$oldPromotedGuard = @'
+            if (isTerminalWin && !plugin.Dispatcher.IsCallPromptVisible())
+            {
+                pendingTerminalWin = null;
+                LastActionDescription = $"discard promoted to win, but prompt is no longer visible (state={currentState})";
+                log.Info($"[AutoPlayLoop] {LastActionDescription}");
+                return;
+            }
+'@
+$newPromotedGuard = @'
+            if (isTerminalWin && !plugin.Dispatcher.IsCallPromptVisible())
+            {
+                bool locallyConfirmedWin = false;
+                string localWinCheck = "no discard snapshot";
+                if (snap is not null && snap.Legal.Can(ActionFlags.Discard))
+                {
+                    var localChoice = plugin.Aggregator.Choose(snap);
+                    localWinCheck = $"{localChoice.Kind}: {localChoice.Reasoning}";
+                    locallyConfirmedWin =
+                        localChoice.Kind == ActionKind.Tsumo && snap.Legal.Can(ActionFlags.Tsumo)
+                        || localChoice.Kind == ActionKind.Ron && snap.Legal.Can(ActionFlags.Ron)
+                            && plugin.MortalBridge.HasAuthoritativeWinOffer;
+
+                    if (!locallyConfirmedWin)
+                    {
+                        snap = snap with
+                        {
+                            Legal = snap.Legal with
+                            {
+                                Flags = snap.Legal.Flags & ~(ActionFlags.Ron | ActionFlags.Tsumo),
+                            },
+                        };
+                        isTerminalWin = false;
+                        pendingTerminalWin = null;
+                        terminalWinConfirmation.Reset();
+                        log.Warning($"[AutoPlayLoop] stale win flag ignored on discard surface; continuing normal discard. localCheck={localWinCheck} state={currentState} hand={snap.Hand.Count}");
+                    }
+                }
+
+                if (isTerminalWin)
+                {
+                    pendingTerminalWin = null;
+                    LastActionDescription = $"discard promoted to verified win, but prompt is no longer visible (state={currentState})";
+                    log.Info($"[AutoPlayLoop] {LastActionDescription} localCheck={localWinCheck}");
+                    return;
+                }
+            }
+'@
+if ($auto.Contains($oldPromotedGuard)) {
+    $auto = $auto.Replace($oldPromotedGuard, $newPromotedGuard.TrimEnd())
+}
+elseif (-not $auto.Contains('stale win flag ignored on discard surface')) {
+    throw 'SP1.9 stale-win discard guard anchor not found.'
+}
+Set-Content -Path $autoPath -Value $auto -NoNewline
+
+Write-Host 'Applied SP1.9: stale Ron requires authoritative offer; stale Tsumo falls back to verified discard.'
+
