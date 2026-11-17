@@ -507,6 +507,10 @@ jobs:
         shell: pwsh
         run: ./integration-repo/integration/lan-peer/Apply-SmallAccountPacing.ps1
 
+      - name: Enable big-account aggressive Chi/Pon efficiency calls
+        shell: pwsh
+        run: ./integration-repo/integration/lan-peer/Apply-BigAccountAggressiveCalls.ps1
+
       - name: Build plugin
         working-directory: upstream
         run: dotnet build Mahjong.Plugin.Dalamud/Mahjong.Plugin.Dalamud.csproj --configuration Release --no-restore
