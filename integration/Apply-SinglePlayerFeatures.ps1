@@ -338,7 +338,7 @@ Set-Content -Path $autoPath -Value $auto -NoNewline
 # Route our own legal discard turn through the discard scheduler even when
 # state-6 exposes self-declare/call-related flags at the same time.
 $autoPath = 'upstream/Mahjong.Plugin.Dalamud/Actions/AutoPlayLoop.cs'
-$auto = Get-Content $autoPath -Raw
+$auto = (Get-Content $autoPath -Raw) -replace "`r`n?", "`n"
 $oldRoute = @'
         if (isCallPrompt)
             ScheduleCallDecision(context);
@@ -353,6 +353,8 @@ $newRoute = @'
         else
             ScheduleDiscard(context);
 '@
+$oldRoute = $oldRoute -replace "`r`n?", "`n"
+$newRoute = $newRoute -replace "`r`n?", "`n"
 if ($auto.Contains($oldRoute)) { $auto = $auto.Replace($oldRoute, $newRoute) }
 elseif (-not $auto.Contains('if (isCallPrompt && !isDiscardTurn)')) { throw 'Auto-play call/discard route anchor not found.' }
 Set-Content -Path $autoPath -Value $auto -NoNewline
