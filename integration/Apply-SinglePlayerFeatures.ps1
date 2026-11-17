@@ -846,25 +846,17 @@ elseif (-not $auto.Contains('// SP1.8: latch is set only after a successful Next
     throw 'SP1.8 hand-result latch assignment not found.'
 }
 
-$oldResultDispatch = @'
+# Match the dispatch call itself; upstream surrounding diagnostics may change between pins.
+$dispatchCall = '            var result = plugin.Dispatcher.DispatchHandResultNext();'
+$dispatchCallPatched = @'
             var result = plugin.Dispatcher.DispatchHandResultNext();
-            LastActionDescription = $"auto-hand-result-next → {result}";
-            log.Info($"[AutoPlayLoop] hand-result-next dispatch: {LastActionDescription}");
+            handResultDispatchedThisInstance = result == InputDispatcher.DispatchResult.Ok;
 '@
-$newResultDispatch = @'
-            var result = plugin.Dispatcher.DispatchHandResultNext();
-            handResultDispatchedThisInstance = result == DispatchResult.Ok;
-            LastActionDescription = $"auto-hand-result-next → {result}";
-            if (handResultDispatchedThisInstance)
-                log.Info($"[AutoPlayLoop] hand-result-next dispatch accepted: {LastActionDescription}");
-            else
-                log.Warning($"[AutoPlayLoop] hand-result-next dispatch rejected; will retry after cooldown: {LastActionDescription}");
-'@
-if ($auto.Contains($oldResultDispatch)) {
-    $auto = $auto.Replace($oldResultDispatch, $newResultDispatch)
+if ($auto.Contains($dispatchCall) -and -not $auto.Contains('handResultDispatchedThisInstance = result == InputDispatcher.DispatchResult.Ok;')) {
+    $auto = $auto.Replace($dispatchCall, $dispatchCallPatched.TrimEnd())
 }
-elseif (-not $auto.Contains('handResultDispatchedThisInstance = result == DispatchResult.Ok;')) {
-    throw 'SP1.8 hand-result dispatch result anchor not found.'
+elseif (-not $auto.Contains('handResultDispatchedThisInstance = result == InputDispatcher.DispatchResult.Ok;')) {
+    throw 'SP1.8 hand-result dispatch call not found.'
 }
 
 # If the scheduled callback was invalidated before its body ran (for example, a newer
