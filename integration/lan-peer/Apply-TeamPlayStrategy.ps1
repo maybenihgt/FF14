@@ -164,8 +164,15 @@ $bigStrategy = @'
                 plugin.Aggregator.PublishLocalExecution(snapshot, choice, "team-fast-win");
                 return true;
             }
-            if (snapshot.Legal.Can(ActionFlags.Ron) && !plugin.MortalBridge.HasExpiredReactionWindow(snapshot))
+            if (snapshot.Legal.Can(ActionFlags.Ron))
             {
+                if (plugin.MortalBridge.HasExpiredReactionWindow(snapshot))
+                {
+                    choice = ActionChoice.Pass("big account: opponent reaction window already expired");
+                    hasMortalWait = false;
+                    plugin.Aggregator.PublishLocalExecution(snapshot, choice, "team-expired-pass");
+                    return true;
+                }
                 choice = ActionChoice.DeclareRon("big account: accept any legal win");
                 hasMortalWait = false;
                 plugin.Aggregator.PublishLocalExecution(snapshot, choice, "team-fast-win");
@@ -178,6 +185,30 @@ $bigStrategy = @'
                 plugin.Aggregator.PublishLocalExecution(snapshot, choice, "private-quick-win");
                 return true;
             }
+
+            // When the four-account handshake is absent or an outsider is present,
+            // this big account must still play independently rather than wait on a
+            // remote Mortal response. Use the local policy/scored discard list.
+            choice = plugin.Aggregator.Choose(snapshot);
+            if (choice.Kind == ActionKind.Pass &&
+                snapshot.Legal.Can(ActionFlags.Discard) &&
+                plugin.Aggregator.LastScored is { Length: > 0 } scored)
+            {
+                var localBest = scored
+                    .Where(x => snapshot.Hand.Contains(x.Discard) && snapshot.Legal.AllowsDiscard(x.Discard))
+                    .OrderBy(x => x.ShantenAfter)
+                    .ThenByDescending(x => x.UkeireWeighted)
+                    .ThenByDescending(x => x.UkeireKinds)
+                    .ThenByDescending(x => x.Score)
+                    .Take(1)
+                    .ToArray();
+                if (localBest.Length > 0)
+                    choice = ActionChoice.Discard(localBest[0].Discard, "big account: local AI fallback")
+                        with { DiscardIsRed = localBest[0].IsRed };
+            }
+            hasMortalWait = false;
+            plugin.Aggregator.PublishLocalExecution(snapshot, choice, "team-local-ai");
+            return true;
         }
 
 '@
