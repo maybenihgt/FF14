@@ -255,7 +255,7 @@ Set-Content -Path $windowPath -Value $window -NoNewline
 
 # Tsumogiri: validate the hand, then discard the physical draw slot 13.
 $autoPath = 'upstream/Mahjong.Plugin.Dalamud/Actions/AutoPlayLoop.cs'
-$auto = Get-Content $autoPath -Raw
+$auto = (Get-Content $autoPath -Raw) -replace "`r`n?", "`n"
 if (-not $auto.Contains('using Mahjong.Core;')) {
     $auto = $auto.Replace('using Mahjong.Engine;', 'using Mahjong.Engine;' + [Environment]::NewLine + 'using Mahjong.Core;')
 }
@@ -920,10 +920,10 @@ Write-Host 'Applied single-player options, independent auto-queue, validated tsu
 # opponent discard or opponent kakan observed on the server stream.
 
 $bridgePath = 'upstream/Mahjong.Plugin.Dalamud/Mortal/LiveMortalBridge.cs'
-$bridge = Get-Content $bridgePath -Raw
-$offerMarker = '    internal bool HasAuthoritativeOpponentDiscard =>' + [Environment]::NewLine + '        lastNetworkDiscard is { Actor: > 0 };'
-$offerExtended = $offerMarker + [Environment]::NewLine + [Environment]::NewLine +
-    '    internal bool HasAuthoritativeWinOffer =>' + [Environment]::NewLine +
+$bridge = (Get-Content $bridgePath -Raw) -replace "`r`n?", "`n"
+$offerMarker = '    internal bool HasAuthoritativeOpponentDiscard =>' + "`n" + '        lastNetworkDiscard is { Actor: > 0 };'
+$offerExtended = $offerMarker + "`n`n" +
+    '    internal bool HasAuthoritativeWinOffer =>' + "`n" +
     '        lastNetworkDiscard is { Actor: > 0 } || lastNetworkKakan is { Actor: > 0 };'
 if ($bridge.Contains($offerMarker) -and -not $bridge.Contains('internal bool HasAuthoritativeWinOffer')) {
     $bridge = $bridge.Replace($offerMarker, $offerExtended)
