@@ -14,13 +14,14 @@ namespace Mahjong.Plugin.Dalamud.Networking;
 public sealed class LanPeerDiscovery : IDisposable
 {
     public const int DefaultPort = 47721;
-    private const string Protocol = "doman-mahjong-peer-v3";
+    private const string Protocol = "doman-mahjong-peer-v4";
     private const int MaxPacketBytes = 2048;
     private static readonly TimeSpan PeerExpiry = TimeSpan.FromSeconds(8);
     private static readonly TimeSpan BroadcastInterval = TimeSpan.FromSeconds(2);
 
     private readonly Func<bool> enabled;
     private readonly Func<string> accountType;
+    private readonly Func<bool> shareHandsConsent;
     private readonly string instanceId = Guid.NewGuid().ToString("N");
     private readonly ConcurrentDictionary<string, LanPeerInfo> peers = new();
     private readonly CancellationTokenSource lifetime = new();
@@ -28,10 +29,11 @@ public sealed class LanPeerDiscovery : IDisposable
     private readonly Task broadcasterTask;
     private string lastError = string.Empty;
 
-    public LanPeerDiscovery(Func<bool> enabled, Func<string> accountType)
+    public LanPeerDiscovery(Func<bool> enabled, Func<string> accountType, Func<bool> shareHandsConsent)
     {
         this.enabled = enabled;
         this.accountType = accountType;
+        this.shareHandsConsent = shareHandsConsent;
         receiverTask = Task.Run(() => ReceiveLoopAsync(lifetime.Token));
         broadcasterTask = Task.Run(() => BroadcastLoopAsync(lifetime.Token));
     }
@@ -58,10 +60,25 @@ public sealed class LanPeerDiscovery : IDisposable
                 AccountType,
                 "本机",
                 typeof(LanPeerDiscovery).Assembly.GetName().Version?.ToString() ?? "unknown",
+                shareHandsConsent(),
                 DateTimeOffset.UtcNow));
             return all.OrderBy(p => p.InstanceId, StringComparer.Ordinal).ToArray();
         }
     }
+
+    public bool AllFourConsented
+    {
+        get
+        {
+            var roster = Roster;
+            return roster.Count == 4 && roster.All(p => p.ShareHandsConsent);
+        }
+    }
+
+    public bool IsConsentedPeer(string instanceId, string accountRole) =>
+        peers.TryGetValue(instanceId, out var peer) &&
+        peer.AccountType == accountRole &&
+        peer.ShareHandsConsent;
 
     public string LastError => Volatile.Read(ref lastError);
 
@@ -81,6 +98,7 @@ public sealed class LanPeerDiscovery : IDisposable
                         instanceId,
                         AccountType,
                         typeof(LanPeerDiscovery).Assembly.GetName().Version?.ToString() ?? "unknown",
+                        shareHandsConsent(),
                         sentAt);
                     byte[] payload = JsonSerializer.SerializeToUtf8Bytes(frame);
                     bool sendFailed = false;
@@ -148,6 +166,7 @@ public sealed class LanPeerDiscovery : IDisposable
                         frame.AccountType,
                         datagram.RemoteEndPoint.Address.ToString(),
                         frame.PluginVersion,
+                        frame.ShareHandsConsent,
                         DateTimeOffset.UtcNow);
                     Volatile.Write(ref lastError, string.Empty);
                 }
@@ -273,6 +292,7 @@ public sealed class LanPeerDiscovery : IDisposable
         string InstanceId,
         string AccountType,
         string PluginVersion,
+        bool ShareHandsConsent,
         long SentAtUnixMs);
 }
 
@@ -281,4 +301,5 @@ public sealed record LanPeerInfo(
     string AccountType,
     string Address,
     string PluginVersion,
+    bool ShareHandsConsent,
     DateTimeOffset LastSeenUtc);
