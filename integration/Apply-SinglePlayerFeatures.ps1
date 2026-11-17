@@ -603,18 +603,23 @@ $oldCallChoice = @'
                 return;
             }
 '@
-$newCallChoice = @'
+$newCallChoice = $oldCallChoice
+if ($auto.Contains('tsumogiri mode: decline calls and wait for own draw'))
+{
+    $auto = $auto.Replace(@'
             ActionChoice choice;
             if (plugin.Configuration.AutoPlayMode == AutoPlayMode.Tsumogiri)
             {
                 hasMortalWait = false;
-                // Feeder account: never take Chi/Pon/Kan, Ron or Tsumo.
-                // Pass every reaction prompt and wait for the next own draw.
-                if (snap.Legal.Can(ActionFlags.Pass))
-                    choice = ActionChoice.Pass("feeder tsumogiri mode: pass every call and win prompt");
+                if (snap.Legal.Can(ActionFlags.Tsumo))
+                    choice = ActionChoice.DeclareTsumo("tsumogiri mode: accept legal self-draw win");
+                else if (snap.Legal.Can(ActionFlags.Ron))
+                    choice = ActionChoice.DeclareRon("tsumogiri mode: accept legal discard win");
+                else if (snap.Legal.Can(ActionFlags.Pass))
+                    choice = ActionChoice.Pass("tsumogiri mode: decline calls and wait for own draw");
                 else
                 {
-                    LastActionDescription = "feeder mode: no legal pass action; waiting without claiming";
+                    LastActionDescription = "tsumogiri mode: no legal pass/win action; waiting without calling";
                     fsm.ClearContext();
                     return;
                 }
@@ -625,45 +630,8 @@ $newCallChoice = @'
                 fsm.ClearContext();
                 return;
             }
-'@
-if ($auto.Contains($oldCallChoice)) { $auto = $auto.Replace($oldCallChoice, $newCallChoice) }
-elseif (-not $auto.Contains('tsumogiri mode: decline calls and wait for own draw')) { throw 'Call decision choice anchor not found.' }
-
-$oldTsumogiriFailure = @'
-                if (!TryChooseTsumogiri(snap, out choice, out drawnSlot, out drawnIsRed, out string tsumogiriError))
-                {
-                    LastActionDescription = $"tsumogiri paused: {tsumogiriError}";
-                    log.Warning($"[AutoPlayLoop] {LastActionDescription}");
-                    return;
-                }
-'@
-$newTsumogiriFailure = @'
-                if (!TryChooseTsumogiri(snap, out choice, out drawnSlot, out drawnIsRed, out string tsumogiriError))
-                {
-                    // A just-accepted Pon/Chi has no newly drawn tile to tsumogiri.
-                    // Use the policy to select a legal concealed discard rather than freezing
-                    // the hand or trying to discard the claimed tile parked in slot 13.
-                    if (snap.Legal.Can(ActionFlags.Discard)
-                        && TryChoose(snap, out var recoveryChoice)
-                        && (recoveryChoice.Kind is ActionKind.Discard or ActionKind.Riichi)
-                        && recoveryChoice.DiscardTile.HasValue)
-                    {
-                        choice = recoveryChoice;
-                        forceTsumogiri = false;
-                        LastActionDescription = $"post-call tsumogiri recovery: policy discard {choice.DiscardTile}";
-                        log.Warning($"[AutoPlayLoop] {LastActionDescription}; original reason: {tsumogiriError}");
-                    }
-                    else
-                    {
-                        LastActionDescription = $"tsumogiri paused: {tsumogiriError}";
-                        log.Warning($"[AutoPlayLoop] {LastActionDescription}");
-                        fsm.ClearContext();
-                        return;
-                    }
-                }
-'@
-if ($auto.Contains($oldTsumogiriFailure)) { $auto = $auto.Replace($oldTsumogiriFailure, $newTsumogiriFailure) }
-elseif (-not $auto.Contains('post-call tsumogiri recovery: policy discard')) { throw 'Tsumogiri recovery fallback anchor not found.' }
+'@, $oldCallChoice)
+}
 
 Set-Content -Path $autoPath -Value $auto -NoNewline
 
