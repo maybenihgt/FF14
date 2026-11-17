@@ -1096,3 +1096,123 @@ Set-Content -Path $windowPath -Value $window -NoNewline
 Write-Host 'Applied SP1.9 legal-discard Pass recovery: a stale policy Pass now falls back only to a verified local discard.'
 
 
+# SP1.10: manual tile selection (opcode 15) must cancel a queued auto-discard.
+# Opcode 15 selects the physical tile; opcode 7 is the subsequent commit. If
+# only opcode 7 is observed, a delayed queued AI action can still fire the old
+# recommendation after the user has selected a different tile.
+$autoPath = 'upstream/Mahjong.Plugin.Dalamud/Actions/AutoPlayLoop.cs'
+$auto = [regex]::Replace((Get-Content $autoPath -Raw), '\r\n?', [string][char]10)
+$oldInputGate = '        if (input.IntValues[0] is not (7 or 8 or 9 or 10 or 11 or 12 or 14 or 17 or -2)) return;'
+$newInputGate = '        if (input.IntValues[0] is not (7 or 8 or 9 or 10 or 11 or 12 or 14 or 15 or 17 or -2)) return;'
+if ($auto.Contains($oldInputGate)) {
+    $auto = $auto.Replace($oldInputGate, $newInputGate)
+}
+elseif (-not $auto.Contains('or 15 or 17')) {
+    throw 'SP1.10 manual input cancellation opcode gate not found.'
+}
+$oldCancel = @'
+        CompletePendingOutcome("external-input", plugin.Aggregator.Latest);
+        CancelPending();
+'@
+$newCancel = @'
+        log.Info($"[AutoPlayLoop] external input cancelled queued automation: opcode={input.IntValues[0]} args=[{string.Join(",", input.IntValues)}]");
+        CompletePendingOutcome("external-input", plugin.Aggregator.Latest);
+        CancelPending();
+'@
+if ($auto.Contains($oldCancel) -and -not $auto.Contains('external input cancelled queued automation')) {
+    $auto = $auto.Replace($oldCancel, $newCancel)
+}
+elseif (-not $auto.Contains('external input cancelled queued automation')) {
+    throw 'SP1.10 external-input cancellation log anchor not found.'
+}
+
+# Record schedule delay and the time spent waiting for Mortal's first response.
+$oldSchedule = @'
+        var delay = HumanTiming.RandomDelay(medianMs: medianDelayMs);
+        scheduler.Schedule(() =>
+'@
+$newSchedule = @'
+        var delay = HumanTiming.RandomDelay(medianMs: medianDelayMs);
+        log.Info($"[AutoPlayLoop] scheduled {label}: medianDelayMs={medianDelayMs} actualDelayMs={delay.TotalMilliseconds:0} state={context.State} hand={context.Hand}");
+        scheduler.Schedule(() =>
+'@
+if ($auto.Contains($oldSchedule) -and -not $auto.Contains('scheduled {label}: medianDelayMs=')) {
+    $auto = $auto.Replace($oldSchedule, $newSchedule)
+}
+elseif (-not $auto.Contains('scheduled {label}: medianDelayMs=')) {
+    throw 'SP1.10 schedule timing diagnostic anchor not found.'
+}
+
+$oldReady = @'
+            if (plugin.MortalBridge.TryChoose(snapshot, out choice))
+            {
+                dismissedExpiredPromptKey = null;
+                hasMortalWait = false;
+                return true;
+            }
+'@
+$newReady = @'
+            if (plugin.MortalBridge.TryChoose(snapshot, out choice))
+            {
+                if (hasMortalWait)
+                    log.Info($"[AutoPlayLoop] Mortal decision arrived after {(clock.UtcNow - mortalWaitStartedAt).TotalMilliseconds:0}ms; flags={snapshot.Legal.Flags}; modelEvalMs={plugin.MortalBridge.LastModelEvalMilliseconds:0.0}; kind={choice.Kind}; tile={choice.DiscardTile}.");
+                dismissedExpiredPromptKey = null;
+                hasMortalWait = false;
+                return true;
+            }
+'@
+if ($auto.Contains($oldReady) -and -not $auto.Contains('Mortal decision arrived after')) {
+    $auto = $auto.Replace($oldReady, $newReady)
+}
+elseif (-not $auto.Contains('Mortal decision arrived after')) {
+    throw 'SP1.10 Mortal decision-ready diagnostic anchor not found.'
+}
+
+$oldWaitStart = @'
+                mortalWaitStartedAt = now;
+                hasMortalWait = true;
+                return false;
+'@
+$newWaitStart = @'
+                mortalWaitStartedAt = now;
+                hasMortalWait = true;
+                log.Info($"[AutoPlayLoop] waiting for Mortal decision: flags={snapshot.Legal.Flags}; timeout={MortalDecisionTimeout(snapshot.Legal.Flags).TotalMilliseconds:0}ms; state={snapshot.AddonStateCode}; hand={snapshot.Hand.Count}; modelReady={plugin.MortalBridge.IsRunning}.");
+                return false;
+'@
+if ($auto.Contains($oldWaitStart) -and -not $auto.Contains('waiting for Mortal decision: flags=')) {
+    $auto = $auto.Replace($oldWaitStart, $newWaitStart)
+}
+elseif (-not $auto.Contains('waiting for Mortal decision: flags=')) {
+    throw 'SP1.10 Mortal wait-start diagnostic anchor not found.'
+}
+
+$oldTimeout = @'
+            hasMortalWait = false;
+            plugin.MortalBridge.RecoverUnresponsiveDecision(
+'@
+$newTimeout = @'
+            log.Warning($"[AutoPlayLoop] Mortal decision timed out after {(now - mortalWaitStartedAt).TotalMilliseconds:0}ms; flags={snapshot.Legal.Flags}; state={snapshot.AddonStateCode}; hand={snapshot.Hand.Count}; using local fallback.");
+            hasMortalWait = false;
+            plugin.MortalBridge.RecoverUnresponsiveDecision(
+'@
+if ($auto.Contains($oldTimeout) -and -not $auto.Contains('Mortal decision timed out after')) {
+    $auto = $auto.Replace($oldTimeout, $newTimeout)
+}
+elseif (-not $auto.Contains('Mortal decision timed out after')) {
+    throw 'SP1.10 Mortal timeout diagnostic anchor not found.'
+}
+Set-Content -Path $autoPath -Value $auto -NoNewline
+
+# Mark the package so the in-game title proves the manual-input fix is installed.
+$windowPath = 'upstream/Mahjong.Plugin.Dalamud/UI/MainWindow.cs'
+$window = Get-Content $windowPath -Raw
+$window = $window.Replace('BuildUiVersion = "SP1.9"', 'BuildUiVersion = "SP1.10"')
+if (-not $window.Contains('BuildUiVersion = "SP1.10"')) {
+    throw 'Could not set SP1.10 build label.'
+}
+Set-Content -Path $windowPath -Value $window -NoNewline
+
+Write-Host 'Applied SP1.10: manual tile selection cancels queued autoplay; schedule and Mortal wait timing are logged.'
+
+
+
