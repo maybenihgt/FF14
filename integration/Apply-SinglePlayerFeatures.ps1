@@ -1119,6 +1119,7 @@ $newCancel = @'
         CompletePendingOutcome("external-input", plugin.Aggregator.Latest);
         CancelPending();
 '@
+$oldCancel = [regex]::Replace($oldCancel, '\r\n?', [string][char]10)
 if ($auto.Contains($oldCancel) -and -not $auto.Contains('external input cancelled queued automation')) {
     $auto = $auto.Replace($oldCancel, $newCancel)
 }
@@ -1136,6 +1137,7 @@ $newSchedule = @'
         log.Info($"[AutoPlayLoop] scheduled {label}: medianDelayMs={medianDelayMs} actualDelayMs={delay.TotalMilliseconds:0} state={context.State} hand={context.Hand}");
         scheduler.Schedule(() =>
 '@
+$oldSchedule = [regex]::Replace($oldSchedule, '\r\n?', [string][char]10)
 if ($auto.Contains($oldSchedule) -and -not $auto.Contains('scheduled {label}: medianDelayMs=')) {
     $auto = $auto.Replace($oldSchedule, $newSchedule)
 }
@@ -1161,6 +1163,7 @@ $newReady = @'
                 return true;
             }
 '@
+$oldReady = [regex]::Replace($oldReady, '\r\n?', [string][char]10)
 if ($auto.Contains($oldReady) -and -not $auto.Contains('Mortal decision arrived after')) {
     $auto = $auto.Replace($oldReady, $newReady)
 }
@@ -1176,9 +1179,10 @@ $oldWaitStart = @'
 $newWaitStart = @'
                 mortalWaitStartedAt = now;
                 hasMortalWait = true;
-                log.Info($"[AutoPlayLoop] waiting for Mortal decision: flags={snapshot.Legal.Flags}; timeout={MortalDecisionTimeout(snapshot.Legal.Flags).TotalMilliseconds:0}ms; state={snapshot.AddonStateCode}; hand={snapshot.Hand.Count}; modelReady={plugin.MortalBridge.IsRunning}.");
+                log.Info($"[AutoPlayLoop] waiting for Mortal decision: flags={snapshot.Legal.Flags}; timeout={MortalDecisionTimeout(snapshot.Legal.Flags).TotalMilliseconds:0}ms; state={snapshot.AddonStateCode}; hand={snapshot.Hand.Count}; processRunning={plugin.MortalBridge.IsRunning}.");
                 return false;
 '@
+$oldWaitStart = [regex]::Replace($oldWaitStart, '\r\n?', [string][char]10)
 if ($auto.Contains($oldWaitStart) -and -not $auto.Contains('waiting for Mortal decision: flags=')) {
     $auto = $auto.Replace($oldWaitStart, $newWaitStart)
 }
@@ -1195,6 +1199,7 @@ $newTimeout = @'
             hasMortalWait = false;
             plugin.MortalBridge.RecoverUnresponsiveDecision(
 '@
+$oldTimeout = [regex]::Replace($oldTimeout, '\r\n?', [string][char]10)
 if ($auto.Contains($oldTimeout) -and -not $auto.Contains('Mortal decision timed out after')) {
     $auto = $auto.Replace($oldTimeout, $newTimeout)
 }
