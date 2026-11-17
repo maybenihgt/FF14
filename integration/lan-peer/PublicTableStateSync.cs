@@ -260,7 +260,17 @@ public sealed class PublicTableStateSync : IDisposable
             frame.WallRemaining,
             frame.Scores.ToArray(),
             frame.DoraIndicators.ToArray(),
-            frame.Seats.Select(x => x.DiscardCount).ToArray(),
+            frame.Seats.Select(x => new RemotePublicSeatState(
+                x.Discards.ToArray(),
+                x.DiscardIsRed.ToArray(),
+                x.DiscardIsTedashi.ToArray(),
+                x.DiscardWasCalled.ToArray(),
+                x.Melds.Select(m => new RemotePublicMeldState(
+                    m.Kind, m.Tiles.ToArray(), m.ClaimedTile, m.ClaimedFromSeat)).ToArray(),
+                x.Riichi,
+                x.RiichiDiscardIndex,
+                x.Ippatsu,
+                x.DiscardCount)).ToArray(),
             DateTimeOffset.UtcNow);
         Interlocked.Increment(ref framesReceived);
         Volatile.Write(ref lastError, string.Empty);
@@ -523,5 +533,22 @@ public sealed record RemotePublicTableState(
     int WallRemaining,
     int[] Scores,
     int[] DoraIndicators,
-    int[] DiscardCounts,
+    RemotePublicSeatState[] Seats,
     DateTimeOffset LastSeenUtc);
+
+public sealed record RemotePublicSeatState(
+    int[] Discards,
+    bool[] DiscardIsRed,
+    bool[] DiscardIsTedashi,
+    bool[] DiscardWasCalled,
+    RemotePublicMeldState[] Melds,
+    bool Riichi,
+    int RiichiDiscardIndex,
+    bool Ippatsu,
+    int DiscardCount);
+
+public sealed record RemotePublicMeldState(
+    int Kind,
+    int[] Tiles,
+    int? ClaimedTile,
+    int ClaimedFromSeat);
