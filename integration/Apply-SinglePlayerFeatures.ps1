@@ -897,18 +897,9 @@ elseif (-not $auto.Contains('hand-result-next scheduled click became stale befor
     }
 }
 
-# Expose the exact state and elapsed stability wait in logs to distinguish a missing state
-# transition from a rejected button click during in-game verification.
-$oldStableGate = @'
-        if (now - handResultFirstSeenAt < HandResultStabilityWindow)
-            return true;
-'@
-$newStableGate = @'
-        if (now - handResultFirstSeenAt < HandResultStabilityWindow)
-            return true;
-'@
-if (-not $auto.Contains($oldStableGate)) { throw 'SP1.8 result stability gate anchor not found.' }
-# Keep the upstream 3.5 s animation guard unchanged; retry logic above is the behavior change.
+# Keep the pinned upstream 3.5 s result-animation stability gate unchanged.
+# The previous oldStableGate/newStableGate replacement was a no-op and its exact-text
+# assertion needlessly failed against harmless upstream formatting differences.
 Set-Content -Path $autoPath -Value $auto -NoNewline
 
 $windowPath = 'upstream/Mahjong.Plugin.Dalamud/UI/MainWindow.cs'
