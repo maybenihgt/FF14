@@ -636,21 +636,17 @@ if ($auto.Contains('tsumogiri mode: decline calls and wait for own draw'))
 Set-Content -Path $autoPath -Value $auto -NoNewline
 
 
-# Tsumogiri is a strict feeder policy: never accept calls or wins.
-# Route every prompt category independently; own draw turns only discard slot 13.
+# Strict feeder mode: pass every opponent call and every Ron/Tsumo confirmation.
+# The own-draw discard path and slot-13 validation are patched earlier in this script.
 $autoPath = 'upstream/Mahjong.Plugin.Dalamud/Actions/AutoPlayLoop.cs'
-$auto = Get-Content $autoPath -Raw
+$auto = (Get-Content $autoPath -Raw) -replace "\r\n", [string][char]10
 
-# Call prompts (Chi/Pon/Kan/Ron/Tsumo): explicitly Pass, never ask Mortal or local AI.
-$oldCallChoice = @'
-            if (!TryChoose(snap, out var choice))
-            {
-                LastActionDescription = "waiting for Mortal call decision";
-                fsm.ClearContext();
-                return;
-            }
-'@
-$newCallChoice = @'
+$callStart = $auto.IndexOf('    private void ScheduleCallDecision(DispatchContext context)')
+$callEnd = $auto.IndexOf('    private void ScheduleTerminalWinConfirmation(', $callStart)
+if ($callStart -lt 0 -or $callEnd -lt 0) { throw 'ScheduleCallDecision method boundaries not found.' }
+$callBlock = $auto.Substring($callStart, $callEnd - $callStart)
+$callPattern = '(?s)            if \(!TryChoose\(snap, out var choice\)\)\s*\{\s*                LastActionDescription = "waiting for Mortal call decision";\s*                fsm\.ClearContext\(\);\s*                return;\s*            \}'
+$callReplacement = @'
             ActionChoice choice;
             if (plugin.Configuration.AutoPlayMode == AutoPlayMode.Tsumogiri)
             {
@@ -670,99 +666,18 @@ $newCallChoice = @'
                 return;
             }
 '@
-if ($auto.Contains($oldCallChoice)) { $auto = $auto.Replace($oldCallChoice, $newCallChoice) }
-elseif (-not $auto.Contains('strict tsumogiri: pass every call and win prompt')) {
-    throw 'ScheduleCallDecision choice anchor not found.'
+$updatedCall = [regex]::Replace($callBlock, $callPattern, $callReplacement.TrimEnd(), 1)
+if ($updatedCall -eq $callBlock -and -not $callBlock.Contains('strict tsumogiri: pass every call and win prompt')) {
+    throw 'ScheduleCallDecision choice block not found.'
 }
+$auto = $auto.Substring(0, $callStart) + $updatedCall + $auto.Substring($callEnd)
 
-# Draw-turn path: if a win label is surfaced here (including the transient
-# self-draw confirmation route), pass it. Otherwise discard the actual drawn tile.
-$discardStart = $auto.IndexOf('    private void ScheduleDiscard(DispatchContext context)')
-$discardEnd = $auto.IndexOf('    /// <summary>On HookFailed', $discardStart)
-if ($discardStart -lt 0 -or $discardEnd -lt 0) { throw 'ScheduleDiscard method boundaries not found.' }
-$discardBlock = $auto.Substring($discardStart, $discardEnd - $discardStart)
-$oldDiscardChoice = @'
-            if (!TryChoose(snap, out var choice))
-            {
-                LastActionDescription = "waiting for Mortal discard";
-                fsm.ClearContext();
-                return;
-            }
-'@
-$newDiscardChoice = @'
-            bool feederMode = plugin.Configuration.AutoPlayMode == AutoPlayMode.Tsumogiri;
-            ActionChoice choice;
-            int drawnSlot = -1;
-            bool drawnIsRed = false;
-            if (feederMode && isTerminalWin)
-            {
-                if (!snap.Legal.Can(ActionFlags.Pass))
-                {
-                    LastActionDescription = "tsumogiri paused: terminal win prompt has no legal Pass";
-                    fsm.ClearContext();
-                    return;
-                }
-                choice = ActionChoice.Pass("strict tsumogiri: decline Ron/Tsumo");
-            }
-            else if (feederMode)
-            {
-                if (!TryChooseTsumogiri(snap, out choice, out drawnSlot, out drawnIsRed, out string tsumogiriError))
-                {
-                    LastActionDescription = $"tsumogiri paused: {tsumogiriError}";
-                    log.Warning($"[AutoPlayLoop] {LastActionDescription}");
-                    fsm.ClearContext();
-                    return;
-                }
-            }
-            else if (!TryChoose(snap, out choice))
-            {
-                LastActionDescription = "waiting for Mortal discard";
-                fsm.ClearContext();
-                return;
-            }
-'@
-if ($discardBlock.Contains($oldDiscardChoice)) { $discardBlock = $discardBlock.Replace($oldDiscardChoice, $newDiscardChoice) }
-elseif (-not $discardBlock.Contains('strict tsumogiri: decline Ron/Tsumo')) {
-    throw 'ScheduleDiscard choice anchor not found.'
-}
-$oldDispatch = @'
-            if (isTerminalWin)
-                DispatchCallChoice(snap, choice);
-            else
-                DispatchPolicyChoice(snap, choice);
-'@
-$newDispatch = @'
-            if (isTerminalWin)
-                DispatchCallChoice(snap, choice);
-            else if (feederMode)
-            {
-                var result = plugin.Dispatcher.DispatchDiscard(drawnSlot);
-                LastActionDescription = $"auto-tsumogiri {choice.DiscardTile} slot={drawnSlot} → {result}";
-                plugin.GameLogger.RecordAction(ActionKind.Discard, choice.DiscardTile, drawnSlot,
-                    result.ToString(), choice.Reasoning, drawnIsRed);
-                EmitDispatchFinding("tsumogiri", result, tile: choice.DiscardTile, slot: drawnSlot,
-                    snap: snap, isRed: drawnIsRed);
-                ClearRetryDebounceIfHookFailed(result);
-            }
-            else
-                DispatchPolicyChoice(snap, choice);
-'@
-if ($discardBlock.Contains($oldDispatch)) { $discardBlock = $discardBlock.Replace($oldDispatch, $newDispatch) }
-elseif (-not $discardBlock.Contains('auto-tsumogiri {choice.DiscardTile}')) {
-    throw 'ScheduleDiscard dispatch anchor not found.'
-}
-$auto = $auto.Substring(0, $discardStart) + $discardBlock + $auto.Substring($discardEnd)
-
-# Terminal win confirmation is a separate delayed route; never declare the win
-# in feeder mode. Send Pass only while the same live prompt remains visible.
-$oldTerminalMethod = @'
-            var choice = kind == ActionKind.Ron
-                ? ActionChoice.DeclareRon("terminal win confirmation")
-                : ActionChoice.DeclareTsumo("terminal win confirmation");
-            EmitDecisionFinding("terminal-win-confirm", snap, choice);
-            DispatchCallChoice(snap, choice);
-'@
-$newTerminalMethod = @'
+$terminalStart = $auto.IndexOf('    private void ScheduleTerminalWinConfirmation(')
+$terminalEnd = $auto.IndexOf('    private bool TryChoose(', $terminalStart)
+if ($terminalStart -lt 0 -or $terminalEnd -lt 0) { throw 'Terminal confirmation method boundaries not found.' }
+$terminalBlock = $auto.Substring($terminalStart, $terminalEnd - $terminalStart)
+$terminalPattern = '(?s)            var choice = kind == ActionKind\.Ron\s*\? ActionChoice\.DeclareRon\("terminal win confirmation"\)\s*: ActionChoice\.DeclareTsumo\("terminal win confirmation"\);\s*            EmitDecisionFinding\("terminal-win-confirm", snap, choice\);\s*            DispatchCallChoice\(snap, choice\);'
+$terminalReplacement = @'
             if (plugin.Configuration.AutoPlayMode == AutoPlayMode.Tsumogiri)
             {
                 if (!snap.Legal.Can(ActionFlags.Pass))
@@ -785,13 +700,12 @@ $newTerminalMethod = @'
             EmitDecisionFinding("terminal-win-confirm", snap, choice);
             DispatchCallChoice(snap, choice);
 '@
-if ($auto.Contains($oldTerminalMethod)) { $auto = $auto.Replace($oldTerminalMethod, $newTerminalMethod) }
-elseif (-not $auto.Contains('strict tsumogiri: decline terminal win confirmation')) {
-    throw 'ScheduleTerminalWinConfirmation choice anchor not found.'
+$updatedTerminal = [regex]::Replace($terminalBlock, $terminalPattern, $terminalReplacement.TrimEnd(), 1)
+if ($updatedTerminal -eq $terminalBlock -and -not $terminalBlock.Contains('strict tsumogiri: decline terminal win confirmation')) {
+    throw 'Terminal win confirmation choice block not found.'
 }
-
+$auto = $auto.Substring(0, $terminalStart) + $updatedTerminal + $auto.Substring($terminalEnd)
 Set-Content -Path $autoPath -Value $auto -NoNewline
-
 
 # Single-player version in the window title.
 $window = Get-Content $windowPath -Raw
