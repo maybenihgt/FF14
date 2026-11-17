@@ -32,6 +32,7 @@ if (-not $config.Contains('public AutoPlayMode AutoPlayMode')) {
 # Keep the queue option independent. Starting the queue must not arm auto-play.
 $collectionPath = 'upstream/Mahjong.Plugin.Dalamud/Actions/ContinuousCollectionLoop.cs'
 $collection = Get-Content $collectionPath -Raw
+$collection = $collection.Replace('Plugin.ClientState.TerritoryType.RowId == TerritoryId', 'Plugin.ClientState.TerritoryType == TerritoryId')
 $oldStartGuard = '        if (!cfg.TosAccepted || !cfg.AutoPlayConfirmed) return "Enable Auto-play in the main window first.";'
 $newStartGuard = '        if (!cfg.TosAccepted) return "Accept the plugin terms in the main window first.";'
 if ($collection.Contains($oldStartGuard)) { $collection = $collection.Replace($oldStartGuard, $newStartGuard) }
@@ -208,6 +209,13 @@ $method = @'
     }
 
 '@
+$oldHint = 'Theme.Subtle(Loc.T($"Completed this load: {plugin.Collection.CompletedMatches}. No time limit; resumes after reload.", $"本次加载已完成：{plugin.Collection.CompletedMatches} 场。没有时间限制，重载后会继续。"));'
+$newHint = 'Theme.Subtle(Loc.T($"Completed full matches: {cfg.CompletedMatchCount}. Match limit stops auto-play and auto-queue together.", $"已完成完整对局：{cfg.CompletedMatchCount} 场。达到上限后同时停止自动打牌和自动排本。"));'
+$window = $window.Replace($oldHint, $newHint)
+$oldQueueEnd = 'Theme.Subtle(Loc.T("Stop withdraws the queue or finishes the current match. Off stops all play.", "停止会撤销排队，或打完当前这一场。切到“关闭”会停止一切操作。"));'
+$newQueueEnd = 'Theme.Subtle(Loc.T("Auto-queue is independent from auto-play and currently targets the novice East-only ranked duty.", "自动排本与自动打牌独立，目前排队目标为新人东风战段位赛。"));'
+$window = $window.Replace($oldQueueEnd, $newQueueEnd)
+
 if (-not $window.Contains('private void DrawAutoPlayOptions(Configuration cfg)')) {
     if (-not $window.Contains($methodAnchor)) { throw 'Auto-play options insertion point not found.' }
     $window = $window.Replace($methodAnchor, $method + $methodAnchor)
