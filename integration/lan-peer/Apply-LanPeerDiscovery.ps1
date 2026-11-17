@@ -173,7 +173,7 @@ $method = @'
         }
     }
 
-'@'@
+'@
 if (-not $window.Contains('    private void DrawLanPeerCard(Configuration cfg)')) {
     if (-not $window.Contains($methodMarker)) { throw 'Main window method insertion marker not found.' }
     $window = $window.Replace($methodMarker, $method + $methodMarker)
