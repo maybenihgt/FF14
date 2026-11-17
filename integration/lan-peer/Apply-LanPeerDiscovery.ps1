@@ -207,8 +207,24 @@ $method = @'
             {
                 string wind = state.RoundWind switch { 0 => "东", 1 => "南", 2 => "西", 3 => "北", _ => "?" };
                 string scoreText = string.Join("/", state.Scores);
-                string riverText = string.Join("/", state.DiscardCounts);
-                ImGui.BulletText($"{state.AccountType} | {state.Address} | {wind}{state.Kyoku}局 | 剩余牌墙 {state.WallRemaining} | 河 {riverText} | 点数 {scoreText}");
+                if (ImGui.TreeNode($"{state.AccountType} | {state.Address} | {wind}{state.Kyoku}局##public-{state.InstanceId}"))
+                {
+                    ImGui.Text($"剩余牌墙：{state.WallRemaining}  本场：{state.Honba}  分数：{scoreText}");
+                    ImGui.TextWrapped("宝牌指示牌：" + string.Join(" ", state.DoraIndicators.Select(id => new Mahjong.Core.Tile((byte)id).ShortName)));
+                    for (int seatIndex = 0; seatIndex < state.Seats.Length; seatIndex++)
+                    {
+                        var seat = state.Seats[seatIndex];
+                        string riverText = string.Join(" ", seat.Discards.Select((id, index) =>
+                            new Mahjong.Core.Tile((byte)id).ShortName +
+                            (index < seat.DiscardIsRed.Length && seat.DiscardIsRed[index] ? "*" : "") +
+                            (index < seat.DiscardWasCalled.Length && seat.DiscardWasCalled[index] ? "×" : "")));
+                        string meldText = string.Join(" / ", seat.Melds.Select(m =>
+                            (m.Kind switch { 0 => "吃", 1 => "碰", 2 => "暗杠", 3 => "明杠", 4 => "加杠", _ => "副露" }) +
+                            "[" + string.Join(" ", m.Tiles.Select(id => new Mahjong.Core.Tile((byte)id).ShortName)) + "]"));
+                        ImGui.TextWrapped($"座位 {seatIndex}：河 {riverText} | 副露 {meldText} | 立直 {(seat.Riichi ? "是" : "否")}");
+                    }
+                    ImGui.TreePop();
+                }
             }
 
             if (!string.IsNullOrWhiteSpace(plugin.PublicTableSync.LastError))
