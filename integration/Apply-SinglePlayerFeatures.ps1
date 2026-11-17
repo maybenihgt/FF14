@@ -417,12 +417,95 @@ if ($auto.Contains($oldRoute)) { $auto = $auto.Replace($oldRoute, $newRoute) }
 elseif (-not $auto.Contains('if (isCallPrompt && !isDiscardTurn)')) { throw 'Auto-play call/discard route anchor not found.' }
 Set-Content -Path $autoPath -Value $auto -NoNewline
 
+
+# Speed profile: lower the normal humanized action delay and shorten only the safe UI dispatch waits.
+$configPath = 'upstream/Mahjong.Plugin.Dalamud/Configuration.cs'
+$config = Get-Content $configPath -Raw
+$config = $config.Replace('public int HumanizedDelayMs { get; init; } = 1200;', 'public int HumanizedDelayMs { get; init; } = 350;')
+if (-not $config.Contains('public int HumanizedDelayMs { get; init; } = 350;')) { throw 'Could not apply faster default HumanizedDelayMs.' }
+if ($config.Contains('public const int CurrentSchemaVersion = 4;')) {
+    $config = $config.Replace('public const int CurrentSchemaVersion = 4;', 'public const int CurrentSchemaVersion = 5;')
+}
+elseif (-not $config.Contains('public const int CurrentSchemaVersion = 5;')) {
+    throw 'Expected config schema version 4 before speed migration.'
+}
+Set-Content -Path $configPath -Value $config -NoNewline
+
+$timingPath = 'upstream/Mahjong.Plugin.Dalamud/Actions/HumanTiming.cs'
+$timing = Get-Content $timingPath -Raw
+$timing = $timing.Replace('double floorMs = 400.0,', 'double floorMs = 120.0,')
+$timing = $timing.Replace('double capMs = 2500.0)', 'double capMs = 1200.0)')
+if (-not $timing.Contains('double floorMs = 120.0,') -or -not $timing.Contains('double capMs = 1200.0)')) {
+    throw 'Could not apply faster HumanTiming bounds.'
+}
+Set-Content -Path $timingPath -Value $timing -NoNewline
+
+$settingsPath = 'upstream/Mahjong.Plugin.Dalamud/UI/SettingsWindow.cs'
+$settings = Get-Content $settingsPath -Raw
+$settings = $settings.Replace('ref delay, 400, 3000, "%d ms")', 'ref delay, 150, 1500, "%d ms")')
+$settings = $settings.Replace(
+    'Loc.T("Average delay before each auto-play click.", "每次自动点击前的平均延迟。")',
+    'Loc.T("Median delay before an action. Lower values make your turns faster.", "每次自动操作前的延迟中位数。数值越低，自己的回合出牌越快。")')
+if (-not $settings.Contains('ref delay, 150, 1500, "%d ms")')) { throw 'Could not update click-speed slider range.' }
+Set-Content -Path $settingsPath -Value $settings -NoNewline
+
+$autoPath = 'upstream/Mahjong.Plugin.Dalamud/Actions/AutoPlayLoop.cs'
+$auto = Get-Content $autoPath -Raw
+$auto = $auto.Replace('private const int VariantAcceptDelayMs = 500;', 'private const int VariantAcceptDelayMs = 250;')
+$auto = $auto.Replace('private const int CallDecisionDelayMs = 700;', 'private const int CallDecisionDelayMs = 300;')
+$auto = $auto.Replace('private const int TerminalWinConfirmationDelayMs = 400;', 'private const int TerminalWinConfirmationDelayMs = 250;')
+$auto = $auto.Replace('private const int RiichiTsumogiriDelayMs = 700;', 'private const int RiichiTsumogiriDelayMs = 350;')
+if (-not $auto.Contains('private const int CallDecisionDelayMs = 300;')) { throw 'Could not shorten call decision delay.' }
+Set-Content -Path $autoPath -Value $auto -NoNewline
+
+# Existing SP1.1 configs already use schema v4; migrate their old 1200 ms default to 350 ms.
+$pluginPath = 'upstream/Mahjong.Plugin.Dalamud/Plugin.cs'
+$plugin = Get-Content $pluginPath -Raw
+$oldMigrator = '            new ConfigMigratorV3ToV4(),'
+$newMigrator = $oldMigrator + [Environment]::NewLine + '            new ConfigMigratorV4ToV5(),'
+if ($plugin.Contains($oldMigrator) -and -not $plugin.Contains('new ConfigMigratorV4ToV5()')) {
+    $plugin = $plugin.Replace($oldMigrator, $newMigrator)
+}
+elseif (-not $plugin.Contains('new ConfigMigratorV4ToV5()')) {
+    throw 'ConfigMigratorV3ToV4 registration point not found.'
+}
+Set-Content -Path $pluginPath -Value $plugin -NoNewline
+
+$migrationPath = 'upstream/Mahjong.Plugin.Dalamud/Composition/ConfigMigratorV4ToV5.cs'
+$migration = @'
+using Mahjong.Plugin.Game;
+
+namespace Mahjong.Plugin.Dalamud.Composition;
+
+internal sealed class ConfigMigratorV4ToV5 : IConfigMigrator<Configuration>
+{
+    public int FromVersion => 4;
+    public int ToVersion => 5;
+
+    public Configuration Migrate(Configuration input) => input with
+    {
+        Version = ToVersion,
+        HumanizedDelayMs = input.HumanizedDelayMs == 1200
+            ? 350
+            : Math.Clamp(input.HumanizedDelayMs, 150, 1500),
+    };
+}
+'@
+Set-Content -Path $migrationPath -Value $migration
+
+$humanTestPath = 'upstream/tests/Mahjong.Plugin.Dalamud.Tests/HumanTimingTests.cs'
+if (Test-Path $humanTestPath) {
+    $humanTests = Get-Content $humanTestPath -Raw
+    $humanTests = $humanTests.Replace('Assert.InRange(delay.TotalMilliseconds, 400.0, 2500.0);', 'Assert.InRange(delay.TotalMilliseconds, 120.0, 1200.0);')
+    Set-Content -Path $humanTestPath -Value $humanTests -NoNewline
+}
+
 # Single-player version in the window title.
 $window = Get-Content $windowPath -Raw
 if (-not $window.Contains('private const string BuildUiVersion')) {
     $window = $window.Replace(
         '    private readonly Plugin plugin;',
-        '    private const string BuildUiVersion = "SP1.1";' + [Environment]::NewLine + '    private readonly Plugin plugin;')
+        '    private const string BuildUiVersion = "SP1.2";' + [Environment]::NewLine + '    private readonly Plugin plugin;')
 }
 $window = $window.Replace(
     ': base("Doman Mahjong Solver###domanmahjong-main")',
