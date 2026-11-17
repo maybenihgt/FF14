@@ -46,7 +46,7 @@ if (-not $plugin.Contains('public PublicTableStateSync PublicTableSync { get; }'
 }
 if (-not $plugin.Contains('public FourPlayerHandSync HandSync { get; }')) {
     $plugin = $plugin.Replace('    public PublicTableStateSync PublicTableSync { get; }',
-        '    public PublicTableStateSync PublicTableSync { get; }' + [Environment]::NewLine + '    public ConsentedHandSync HandSync { get; }')
+        '    public PublicTableStateSync PublicTableSync { get; }' + [Environment]::NewLine + '    public FourPlayerHandSync HandSync { get; }')
 }
 $aggregatorMarker = '        Aggregator = new StateAggregator(AddonReader, Framework, Policy, PublicState.Merge, () => Configuration);'
 $syncCreate = @'
