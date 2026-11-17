@@ -635,12 +635,135 @@ if ($auto.Contains('tsumogiri mode: decline calls and wait for own draw'))
 
 Set-Content -Path $autoPath -Value $auto -NoNewline
 
+
+# Pure tsumogiri mode: never accept Ron/Tsumo and never make open calls.
+# All reaction prompts are passed; own legal discard turns still use the drawn-tile path.
+$autoPath = 'upstream/Mahjong.Plugin.Dalamud/Actions/AutoPlayLoop.cs'
+$auto = Get-Content $autoPath -Raw
+
+$auto = $auto.Replace(
+    'if (!IsAutomationArmed() || plugin.PublicState.AwaitingNextHand)',
+    'if (!IsAutomationArmed() || plugin.PublicState.AwaitingNextHand || plugin.Configuration.AutoPlayMode == AutoPlayMode.Tsumogiri)')
+
+$auto = $auto.Replace(
+    'if (isTerminalWinConfirmation)',
+    'if (isTerminalWinConfirmation && plugin.Configuration.AutoPlayMode != AutoPlayMode.Tsumogiri)')
+
+$oldCallChoice = @'
+            if (!TryChoose(snap, out var choice))
+            {
+                LastActionDescription = "waiting for Mortal call decision";
+                fsm.ClearContext();
+                return;
+            }
+'@
+$newCallChoice = @'
+            ActionChoice choice;
+            if (plugin.Configuration.AutoPlayMode == AutoPlayMode.Tsumogiri)
+            {
+                hasMortalWait = false;
+                if (!snap.Legal.Can(ActionFlags.Pass))
+                {
+                    LastActionDescription = "pure tsumogiri: no pass action available; refusing all calls and wins";
+                    fsm.ClearContext();
+                    return;
+                }
+                choice = ActionChoice.Pass("pure tsumogiri mode: pass every call and win opportunity");
+            }
+            else if (!TryChoose(snap, out choice))
+            {
+                LastActionDescription = "waiting for Mortal call decision";
+                fsm.ClearContext();
+                return;
+            }
+'@
+if ($auto.Contains($oldCallChoice)) { $auto = $auto.Replace($oldCallChoice, $newCallChoice) }
+elseif (-not $auto.Contains('pure tsumogiri mode: pass every call and win opportunity')) {
+    throw 'Call decision pass-policy anchor not found.'
+}
+
+# If a terminal win appears outside the regular call-prompt route, pass it too.
+$oldTerminalChoice = @'
+            if (!TryChoose(snap, out var choice))
+            {
+                LastActionDescription = "waiting for Mortal discard";
+                fsm.ClearContext();
+                return;
+            }
+'@
+$newTerminalChoice = @'
+            ActionChoice choice;
+            bool forceTsumogiri = plugin.Configuration.AutoPlayMode == AutoPlayMode.Tsumogiri;
+            bool passWin = forceTsumogiri && isTerminalWin && !snap.Legal.Can(ActionFlags.Discard)
+                && snap.Legal.Can(ActionFlags.Pass);
+            bool drawnIsRed = false;
+            int drawnSlot = -1;
+            if (passWin)
+                choice = ActionChoice.Pass("pure tsumogiri mode: pass terminal win");
+            else if (forceTsumogiri && snap.Legal.Can(ActionFlags.Discard))
+            {
+                if (!TryChooseTsumogiri(snap, out choice, out drawnSlot, out drawnIsRed, out string tsumogiriError))
+                {
+                    LastActionDescription = $"tsumogiri paused: {tsumogiriError}";
+                    log.Warning($"[AutoPlayLoop] {LastActionDescription}");
+                    fsm.ClearContext();
+                    return;
+                }
+            }
+            else if (!forceTsumogiri && !TryChoose(snap, out choice))
+            {
+                LastActionDescription = "waiting for Mortal discard";
+                fsm.ClearContext();
+                return;
+            }
+            else if (forceTsumogiri)
+            {
+                LastActionDescription = "pure tsumogiri: no legal draw discard or pass action";
+                fsm.ClearContext();
+                return;
+            }
+'@
+if ($auto.Contains($oldTerminalChoice)) { $auto = $auto.Replace($oldTerminalChoice, $newTerminalChoice) }
+elseif (-not $auto.Contains('bool passWin = forceTsumogiri && isTerminalWin')) {
+    throw 'Terminal win/discard policy anchor not found.'
+}
+
+$oldDispatchChoice = @'
+            if (isTerminalWin)
+                DispatchCallChoice(snap, choice);
+            else
+                DispatchPolicyChoice(snap, choice);
+'@
+$newDispatchChoice = @'
+            if (passWin || (isTerminalWin && choice.Kind == ActionKind.Pass))
+                DispatchCallChoice(snap, choice);
+            else if (forceTsumogiri)
+            {
+                var result = plugin.Dispatcher.DispatchDiscard(drawnSlot);
+                LastActionDescription = $"auto-tsumogiri {choice.DiscardTile} slot={drawnSlot} → {result}";
+                plugin.GameLogger.RecordAction(ActionKind.Discard, choice.DiscardTile, drawnSlot,
+                    result.ToString(), choice.Reasoning, drawnIsRed);
+                EmitDispatchFinding("tsumogiri", result, tile: choice.DiscardTile, slot: drawnSlot,
+                    snap: snap, isRed: drawnIsRed);
+                ClearRetryDebounceIfHookFailed(result);
+            }
+            else if (isTerminalWin)
+                DispatchCallChoice(snap, choice);
+            else
+                DispatchPolicyChoice(snap, choice);
+'@
+if ($auto.Contains($oldDispatchChoice)) { $auto = $auto.Replace($oldDispatchChoice, $newDispatchChoice) }
+elseif (-not $auto.Contains('if (passWin || (isTerminalWin && choice.Kind == ActionKind.Pass))')) {
+    throw 'Terminal win dispatch anchor not found.'
+}
+Set-Content -Path $autoPath -Value $auto -NoNewline
+
 # Single-player version in the window title.
 $window = Get-Content $windowPath -Raw
 if (-not $window.Contains('private const string BuildUiVersion')) {
     $window = $window.Replace(
         '    private readonly Plugin plugin;',
-        '    private const string BuildUiVersion = "SP1.5";' + [Environment]::NewLine + '    private readonly Plugin plugin;')
+        '    private const string BuildUiVersion = "SP1.6";' + [Environment]::NewLine + '    private readonly Plugin plugin;')
 }
 $window = $window.Replace(
     ': base("Doman Mahjong Solver###domanmahjong-main")',
