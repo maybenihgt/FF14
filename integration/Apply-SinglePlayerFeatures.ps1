@@ -1469,3 +1469,48 @@ Write-Host 'Applied SP1.11: Mahjong rank/rating reader and tool-side career stat
 
 
 
+
+
+# SP1.12: start terminal-win duplicate suppression immediately after the first
+# accepted UI dispatch. Previously the 5s suppression latch was only set after
+# the confirmation phase, so a slow/no-ack Ron prompt could be dispatched again
+# as soon as the 5s outcome timer expired.
+$autoPath = 'upstream/Mahjong.Plugin.Dalamud/Actions/AutoPlayLoop.cs'
+$auto = [regex]::Replace((Get-Content $autoPath -Raw), '\r\n?', [string][char]10)
+
+$oldWindow = '    private static readonly TimeSpan TerminalWinSuppressionWindow = TimeSpan.FromSeconds(5.0);'
+$newWindow = '    private static readonly TimeSpan TerminalWinSuppressionWindow = TimeSpan.FromSeconds(8.0);'
+if ($auto.Contains($oldWindow)) {
+    $auto = $auto.Replace($oldWindow, $newWindow)
+}
+elseif (-not $auto.Contains('TerminalWinSuppressionWindow = TimeSpan.FromSeconds(8.0)')) {
+    throw 'SP1.12 terminal-win suppression window anchor not found.'
+}
+
+$dispatchAnchor = '        EmitDispatchFinding(label, result2, option: acceptIndex, snap: snap);'
+$dispatchPatch = @'
+        EmitDispatchFinding(label, result2, option: acceptIndex, snap: snap);
+        if (isTerminalWin && result2 == InputDispatcher.DispatchResult.Ok && !isTerminalConfirmation)
+        {
+            terminalWinDispatchedAt = clock.UtcNow;
+            log.Warning($"[AutoPlayLoop] initial terminal-win input sent; suppressing duplicate attempts for {TerminalWinSuppressionWindow.TotalSeconds:0}s (kind={loggedKind}, state={snap.AddonStateCode}, hand={snap.Hand.Count}).");
+        }
+'@
+$dispatchPatch = [regex]::Replace($dispatchPatch, '\r\n?', [string][char]10)
+if ($auto.Contains($dispatchAnchor) -and -not $auto.Contains('initial terminal-win input sent; suppressing duplicate attempts')) {
+    $auto = $auto.Replace($dispatchAnchor, $dispatchPatch.TrimEnd())
+}
+elseif (-not $auto.Contains('initial terminal-win input sent; suppressing duplicate attempts')) {
+    throw 'SP1.12 terminal-win dispatch latch insertion point not found.'
+}
+Set-Content -Path $autoPath -Value $auto -NoNewline
+
+$windowPath = 'upstream/Mahjong.Plugin.Dalamud/UI/MainWindow.cs'
+$window = Get-Content $windowPath -Raw
+$window = $window.Replace('BuildUiVersion = "SP1.11"', 'BuildUiVersion = "SP1.12"')
+if (-not $window.Contains('BuildUiVersion = "SP1.12"')) {
+    throw 'Could not set SP1.12 build label.'
+}
+Set-Content -Path $windowPath -Value $window -NoNewline
+
+Write-Host 'Applied SP1.12: suppress duplicate terminal-win dispatch immediately after the initial accepted input.'
