@@ -1514,3 +1514,63 @@ if (-not $window.Contains('BuildUiVersion = "SP1.12"')) {
 Set-Content -Path $windowPath -Value $window -NoNewline
 
 Write-Host 'Applied SP1.12: suppress duplicate terminal-win dispatch immediately after the initial accepted input.'
+
+
+# SP1.13: if a scheduled Pass becomes stale because the live prompt changed
+# into a Ron/Tsumo offer, re-evaluate the fresh snapshot and dispatch the new
+# terminal-win choice instead of clearing the FSM and leaving the prompt idle.
+$autoPath = 'upstream/Mahjong.Plugin.Dalamud/Actions/AutoPlayLoop.cs'
+$auto = [regex]::Replace((Get-Content $autoPath -Raw), '\r\n?', [string][char]10)
+$methodPattern = '(?s)    private bool TryRefreshCallDispatch\(.*?(?=    internal static bool TryResolveCallOption)'
+$methodReplacement = @'
+    private bool TryRefreshCallDispatch(
+        StateSnapshot decision, ActionKind kind, out StateSnapshot current, out int option)
+    {
+        var observed = plugin.AddonReader.TryBuildSnapshot();
+        current = observed is null ? decision : plugin.Aggregator.Enrich(observed);
+        option = -1;
+        if (observed is not null
+            && plugin.Dispatcher.IsCallPromptVisible()
+            && !(kind == ActionKind.Ron && plugin.MortalBridge.HasExpiredReactionWindow(current))
+            && TryResolveCallOption(decision, current, kind, out option)
+            && plugin.Dispatcher.TryResolveLiveCallOption(kind, out option))
+            return true;
+
+        // A scheduled Pass can become stale while the server replaces the call
+        // row with a new Ron/Tsumo offer. Do not stop at aborting the old input:
+        // re-run the policy on the live snapshot and handle a verified win now.
+        if (kind == ActionKind.Pass
+            && observed is not null
+            && plugin.Dispatcher.IsCallPromptVisible()
+            && TerminalWinConfirmationTracker.HasSameHandContext(decision, current)
+            && (current.Legal.Flags & (ActionFlags.Ron | ActionFlags.Tsumo)) != 0
+            && TryChoose(current, out var refreshedChoice)
+            && refreshedChoice.Kind is ActionKind.Ron or ActionKind.Tsumo)
+        {
+            log.Warning($"[AutoPlayLoop] stale Pass replaced by live {refreshedChoice.Kind} offer; re-evaluating and dispatching fresh prompt (state={current.AddonStateCode}, flags={current.Legal.Flags}).");
+            DispatchCallChoice(current, refreshedChoice);
+            return false;
+        }
+
+        LastActionDescription = $"{kind} aborted: call prompt changed before input";
+        log.Info($"[AutoPlayLoop] {LastActionDescription}");
+        fsm.ClearContext();
+        return false;
+    }
+
+'@
+$updatedAuto = [regex]::Replace($auto, $methodPattern, $methodReplacement, 1)
+if ($updatedAuto -eq $auto -or -not $updatedAuto.Contains('stale Pass replaced by live')) {
+    throw 'SP1.13 live-prompt re-evaluation patch anchor not found.'
+}
+Set-Content -Path $autoPath -Value $updatedAuto -NoNewline
+
+$windowPath = 'upstream/Mahjong.Plugin.Dalamud/UI/MainWindow.cs'
+$window = Get-Content $windowPath -Raw
+$window = $window.Replace('BuildUiVersion = "SP1.12"', 'BuildUiVersion = "SP1.13"')
+if (-not $window.Contains('BuildUiVersion = "SP1.13"')) {
+    throw 'Could not set SP1.13 build label.'
+}
+Set-Content -Path $windowPath -Value $window -NoNewline
+
+Write-Host 'Applied SP1.13: re-evaluate fresh Ron/Tsumo offers when a scheduled Pass becomes stale.'
