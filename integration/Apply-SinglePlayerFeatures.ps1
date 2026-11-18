@@ -1574,3 +1574,65 @@ if (-not $window.Contains('BuildUiVersion = "SP1.13"')) {
 Set-Content -Path $windowPath -Value $window -NoNewline
 
 Write-Host 'Applied SP1.13: re-evaluate fresh Ron/Tsumo offers when a scheduled Pass becomes stale.'
+
+
+# SP1.14: isolate AI-win suppression from tsumogiri Pass and reset mode state.
+$autoPath = 'upstream/Mahjong.Plugin.Dalamud/Actions/AutoPlayLoop.cs'
+$auto = [regex]::Replace((Get-Content $autoPath -Raw), '\r\n?', [string][char]10)
+
+# Track the active policy so a mode switch cannot inherit a terminal-win latch.
+$fieldAnchor = '    private bool disposed;'
+$fieldReplacement = $fieldAnchor + [string][char]10 + '    private AutoPlayMode lastObservedAutoPlayMode;'
+if ($auto.Contains($fieldAnchor) -and -not $auto.Contains('private AutoPlayMode lastObservedAutoPlayMode;')) {
+    $auto = $auto.Replace($fieldAnchor, $fieldReplacement)
+}
+
+$ctorAnchor = '        this.addon = addon;'
+$ctorReplacement = $ctorAnchor + [string][char]10 + '        lastObservedAutoPlayMode = plugin.Configuration.AutoPlayMode;'
+if ($auto.Contains($ctorAnchor) -and -not $auto.Contains('lastObservedAutoPlayMode = plugin.Configuration.AutoPlayMode;')) {
+    $auto = $auto.Replace($ctorAnchor, $ctorReplacement)
+}
+
+$oldConfigHandler = '    private void OnConfigurationChanged(Configuration _) => CancelPending();'
+$newConfigHandler = @'
+    private void OnConfigurationChanged(Configuration configuration)
+    {
+        bool modeChanged = configuration.AutoPlayMode != lastObservedAutoPlayMode;
+        lastObservedAutoPlayMode = configuration.AutoPlayMode;
+        CancelPending();
+        if (modeChanged)
+        {
+            terminalWinDispatchedAt = null;
+            pendingTerminalWin = null;
+            terminalWinConfirmation.Reset();
+            hasMortalWait = false;
+            dismissedExpiredPromptKey = null;
+            LastActionDescription = $"automation mode changed to {configuration.AutoPlayMode}; previous-mode win state cleared";
+            log.Info($"[AutoPlayLoop] {LastActionDescription}.");
+        }
+    }
+'@
+$newConfigHandler = [regex]::Replace($newConfigHandler, '\r\n?', [string][char]10)
+if ($auto.Contains($oldConfigHandler)) {
+    $auto = $auto.Replace($oldConfigHandler, $newConfigHandler.TrimEnd())
+} elseif (-not $auto.Contains('previous-mode win state cleared')) {
+    throw 'SP1.14 configuration-change handler anchor not found.'
+}
+
+# A Pass in strict tsumogiri mode is not a win dispatch and must not acquire the AI win lock.
+$oldLatchCondition = '        if (isTerminalWin && result2 == InputDispatcher.DispatchResult.Ok && !isTerminalConfirmation)'
+$newLatchCondition = '        if (plugin.Configuration.AutoPlayMode == AutoPlayMode.Ai && isTerminalWin && result2 == InputDispatcher.DispatchResult.Ok && !isTerminalConfirmation)'
+if ($auto.Contains($oldLatchCondition)) {
+    $auto = $auto.Replace($oldLatchCondition, $newLatchCondition)
+} elseif (-not $auto.Contains($newLatchCondition)) {
+    throw 'SP1.14 terminal-win latch condition anchor not found.'
+}
+
+Set-Content -Path $autoPath -Value $auto -NoNewline
+
+$windowPath = 'upstream/Mahjong.Plugin.Dalamud/UI/MainWindow.cs'
+$window = Get-Content $windowPath -Raw
+$window = $window.Replace('BuildUiVersion = "SP1.13"', 'BuildUiVersion = "SP1.14"')
+if (-not $window.Contains('BuildUiVersion = "SP1.14"')) { throw 'Could not set SP1.14 build label.' }
+Set-Content -Path $windowPath -Value $window -NoNewline
+Write-Host 'Applied SP1.14: AI-only terminal-win suppression and clean state reset on policy switch.'
